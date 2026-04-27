@@ -62,7 +62,21 @@ export default function ProductFamilyDetail() {
       api.get("/materials"),
       api.get("/categories"),
     ]);
-    setFamily(fr.data); setVariants(vr.data); setMats(mr.data); setCats(cr.data);
+    // Sort: cable size mm² ascending, then hole size, then product code
+    const numericPart = (s) => {
+      const m = String(s || "").match(/[\d.]+/);
+      return m ? parseFloat(m[0]) : Number.POSITIVE_INFINITY;
+    };
+    const sorted = [...vr.data].sort((a, b) => {
+      const ca = numericPart(a.cable_size);
+      const cb = numericPart(b.cable_size);
+      if (ca !== cb) return ca - cb;
+      const ha = numericPart(a.hole_size);
+      const hb = numericPart(b.hole_size);
+      if (ha !== hb) return ha - hb;
+      return String(a.product_code).localeCompare(String(b.product_code));
+    });
+    setFamily(fr.data); setVariants(sorted); setMats(mr.data); setCats(cr.data);
   };
 
   useEffect(() => { load(); }, [id]);

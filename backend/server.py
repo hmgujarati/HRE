@@ -364,52 +364,74 @@ def _norm(s: Any) -> str:
     return str(s or "").strip().lower().replace(".", "").replace(" ", "")
 
 
+def _norm_code(s: Any) -> str:
+    """Normalise product code for matching: uppercase, remove all whitespace."""
+    return "".join(str(s or "").upper().split())
+
+
 def _parse_variant_workbook(content: bytes) -> tuple[list[str], list[list[Any]]]:
-    """Return (header_keys, data_rows). Detects header row by looking for cable/prod columns.
-    Headers may span 2 rows (merged 'DIMENSIONS' label) — we pick the row with the most named cells.
+    """Return (header_keys, data_rows). Tolerates 1/2/3-row merged headers
+    (e.g. row 0 has 'CABLE SIZE / HOLE E / DIMENSIONS / PROD. CODE' with merged cells,
+    row 1 is empty due to vertical merges, row 2 carries dimension sub-keys A/B/C/D...).
     """
     wb = openpyxl.load_workbook(BytesIO(content), data_only=True)
     ws = wb.active
+
+    # Unmerge so each cell holds its own value (top-left value already there)
     rows = [list(r) for r in ws.iter_rows(values_only=True)]
     if not rows:
         raise HTTPException(status_code=400, detail="Empty workbook")
 
-    # Find header row: first row that contains any of cable/hole/prod/code keywords
-    header_idx = None
-    for i, row in enumerate(rows[:5]):
-        norm = [_norm(c) for c in row]
-        joined = "|".join(norm)
-        if any(k in joined for k in ["cable", "prod", "code"]) and any(c in {"a", "b", "c", "d", "e", "f", "g", "h", "j", "k", "l", "l1"} for c in norm):
-            header_idx = i
+    n_cols = max(len(r) for r in rows)
+    rows = [list(r) + [None] * (n_cols - len(r)) for r in rows]
+
+    # Find data-start: first row with a value that looks like a product code
+    # (contains a digit AND alphabetic — e.g. RI-7153, PT-9, RII-7057).
+    def looks_like_code(v):
+        if v is None:
+            return False
+        s = str(v).strip()
+        return bool(s) and any(ch.isdigit() for ch in s) and any(ch.isalpha() for ch in s)
+
+    def looks_like_number(v):
+        if v is None:
+            return False
+        try:
+            float(str(v).strip())
+            return True
+        except Exception:
+            return False
+
+    data_start = None
+    for i, row in enumerate(rows):
+        # at least one cell is a code AND at least 3 cells are numeric → data row
+        if any(looks_like_code(c) for c in row) and sum(1 for c in row if looks_like_number(c)) >= 3:
+            data_start = i
             break
-    if header_idx is None:
-        # fall back: first non-empty row is header
-        for i, row in enumerate(rows):
-            if any(c is not None and str(c).strip() for c in row):
-                header_idx = i
-                break
-    if header_idx is None:
-        raise HTTPException(status_code=400, detail="Could not detect header row")
+    if data_start is None or data_start == 0:
+        raise HTTPException(status_code=400, detail="Could not locate data rows in spreadsheet")
 
-    # If next row also has many letters/keywords, merge them (ie DIMENSIONS spanning row)
-    raw_header = rows[header_idx]
-    next_row = rows[header_idx + 1] if header_idx + 1 < len(rows) else []
-    merged: list[str] = []
-    for col_i, cell in enumerate(raw_header):
-        c = (str(cell).strip() if cell is not None else "")
-        # If header is empty or "DIMENSIONS" or generic, look at next row
-        if not c or c.lower() == "dimensions":
-            nxt = next_row[col_i] if col_i < len(next_row) else None
-            c = (str(nxt).strip() if nxt is not None else c)
-        merged.append(c)
+    # Build per-column header by collecting non-empty values from rows 0..data_start-1.
+    # Skip generic group labels like 'DIMENSIONS'. Prefer the most specific (last) value.
+    GENERIC = {"dimensions", "dimension", "specs", "specification"}
+    headers: list[str] = []
+    for ci in range(n_cols):
+        chosen = ""
+        for ri in range(data_start):
+            v = rows[ri][ci]
+            if v is None:
+                continue
+            sv = str(v).strip()
+            if not sv:
+                continue
+            if sv.lower() in GENERIC:
+                continue
+            chosen = sv
+        headers.append(chosen)
 
-    # Determine if next_row was header continuation (skip it) — heuristic: if at least 2 of merged came from next_row
-    used_next = sum(1 for col_i in range(len(raw_header)) if not (raw_header[col_i] and str(raw_header[col_i]).strip() and str(raw_header[col_i]).strip().lower() != "dimensions"))
-    data_start = header_idx + (2 if used_next >= 2 and header_idx + 1 < len(rows) else 1)
     data = rows[data_start:]
-    # filter blank rows
     data = [r for r in data if any(c is not None and str(c).strip() != "" for c in r)]
-    return merged, data
+    return headers, data
 
 
 def _classify_header(h: str) -> str:
@@ -417,12 +439,12 @@ def _classify_header(h: str) -> str:
     n = _norm(h)
     if not n:
         return "skip"
-    if "cable" in n or n == "mm2" or "size" in n and "hole" not in n:
+    if "prod" in n or "code" in n:
+        return "code"
+    if "cable" in n or n == "mm2" or ("size" in n and "hole" not in n):
         return "cable"
     if "hole" in n or n == "e":
         return "hole"
-    if "prod" in n or "code" in n:
-        return "code"
     # treat as dimension key, preserve original label (strip whitespace)
     return f"dim:{h.strip()}"
 
@@ -482,15 +504,25 @@ async def upload_variants_excel(
             if not code:
                 skipped += 1
                 continue
+            # Collapse multiple spaces, then store; match by normalised (no-space, upper) form
+            code_clean = " ".join(code.split())
+            code_key = _norm_code(code_clean)
             # Normalise cable size: append mm² if pure number
             if cable and not any(unit in cable.lower() for unit in ["mm", "sq", "²", "2"]):
                 cable_disp = f"{cable} mm²"
             else:
                 cable_disp = cable
 
-            existing = await db.product_variants.find_one({"product_code": code}, {"_id": 0})
+            # Find existing variant by normalised product code (handles 'RI-7153' vs 'RI - 7153')
+            existing = None
+            async for v in db.product_variants.find({}, {"_id": 0}):
+                if _norm_code(v.get("product_code", "")) == code_key:
+                    existing = v
+                    break
+
             if existing:
                 upd = {
+                    "product_code": code_clean,
                     "cable_size": cable_disp or existing.get("cable_size", ""),
                     "hole_size": hole or existing.get("hole_size", ""),
                     "dimensions": dims or existing.get("dimensions", {}),
@@ -506,7 +538,7 @@ async def upload_variants_excel(
                 doc = {
                     "id": str(uuid.uuid4()),
                     "product_family_id": fid,
-                    "product_code": code,
+                    "product_code": code_clean,
                     "product_name": "",
                     "material_id": family["material_id"],
                     "category_id": family["category_id"],
