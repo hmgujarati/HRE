@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { formatApiError } from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { ArrowRight, ShieldCheck } from "@phosphor-icons/react";
 
 export default function Login() {
@@ -11,6 +11,11 @@ export default function Login() {
   const [password, setPassword] = useState("Admin@123");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    api.get("/public/stats").then((r) => setStats(r.data)).catch(() => {});
+  }, []);
 
   if (user) return <Navigate to="/dashboard" replace />;
 
@@ -52,12 +57,12 @@ export default function Login() {
           </p>
           <div className="mt-10 grid grid-cols-3 gap-4 max-w-md">
             {[
-              { k: "Materials", v: "2+" },
-              { k: "Product Families", v: "3+" },
-              { k: "Variants", v: "9+" },
+              { k: "Materials", v: stats ? stats.materials : "—" },
+              { k: "Product Families", v: stats ? stats.families : "—" },
+              { k: "Variants", v: stats ? stats.variants : "—" },
             ].map((s) => (
               <div key={s.k} className="border-l-2 border-[#FBAE17] pl-3">
-                <div className="font-heading font-black text-2xl">{s.v}</div>
+                <div className="font-heading font-black text-2xl" data-testid={`login-stat-${s.k.toLowerCase().replace(/\s+/g, '-')}`}>{s.v}</div>
                 <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold">{s.k}</div>
               </div>
             ))}

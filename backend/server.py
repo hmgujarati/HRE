@@ -775,6 +775,21 @@ async def dashboard_stats(_: dict = Depends(get_current_user)):
     }
 
 
+# ---------- Public (unauthenticated) ----------
+@api.get("/")
+async def root():
+    return {"service": "HRE Exporter CRM API", "status": "ok"}
+
+
+@api.get("/public/stats")
+async def public_stats():
+    """Lightweight, unauthenticated counts for the login splash."""
+    materials = await db.materials.count_documents({"active": True})
+    families = await db.product_families.count_documents({"active": True})
+    variants = await db.product_variants.count_documents({"active": True})
+    return {"materials": materials, "families": families, "variants": variants}
+
+
 # ---------- Mount ----------
 app.include_router(api)
 app.mount("/api/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
