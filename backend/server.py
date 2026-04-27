@@ -519,11 +519,12 @@ async def upload_variants_excel(
             # Collapse multiple spaces, then store; match by normalised (no-space, upper) form
             code_clean = " ".join(code.split())
             code_key = _norm_code(code_clean)
-            # Normalise cable size: append mm² if pure number
-            if cable and not any(unit in cable.lower() for unit in ["mm", "sq", "²", "2"]):
-                cable_disp = f"{cable} mm²"
+            # Normalise cable size: append mm² if no unit suffix present
+            cable_clean = (cable or "").strip()
+            if cable_clean and not any(u in cable_clean.lower() for u in ["mm", "sq", "²"]):
+                cable_disp = f"{cable_clean} mm²"
             else:
-                cable_disp = cable
+                cable_disp = cable_clean
 
             # Find existing variant by normalised product code (handles 'RI-7153' vs 'RI - 7153')
             existing = None
