@@ -81,32 +81,31 @@ export default function ProductFamilies() {
         }
       />
 
-      <div className="p-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="p-8 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
         {items.map((f) => (
           <div key={f.id} className="border border-zinc-200 bg-white flex flex-col group hover:border-[#FBAE17] transition-colors" data-testid={`family-card-${f.id}`}>
-            <div className="aspect-[4/3] bg-zinc-50 border-b border-zinc-200 relative flex items-center justify-center overflow-hidden">
+            <div className="aspect-square bg-zinc-50 border-b border-zinc-200 relative flex items-center justify-center overflow-hidden">
               {f.main_product_image ? (
-                <img src={fileUrl(f.main_product_image)} alt={f.family_name} className="w-full h-full object-contain p-4" />
+                <img src={fileUrl(f.main_product_image)} alt={f.family_name} className="w-full h-full object-contain p-3" />
               ) : (
-                <div className="text-zinc-300 flex flex-col items-center gap-2">
-                  <ImageIcon size={42} weight="thin" />
-                  <span className="text-xs uppercase tracking-wider">No image</span>
+                <div className="text-zinc-300 flex flex-col items-center gap-1">
+                  <ImageIcon size={28} weight="thin" />
+                  <span className="text-[9px] uppercase tracking-wider">No image</span>
                 </div>
               )}
-              {!f.active && <span className="absolute top-3 left-3 text-[10px] uppercase tracking-wider font-bold bg-zinc-900 text-white px-2 py-0.5">Inactive</span>}
-              <span className="absolute top-3 right-3 text-[10px] uppercase tracking-wider font-bold bg-[#FBAE17] text-black px-2 py-0.5">{matName(f.material_id)}</span>
+              {!f.active && <span className="absolute top-2 left-2 text-[9px] uppercase tracking-wider font-bold bg-zinc-900 text-white px-1.5 py-0.5">Inactive</span>}
+              <span className="absolute top-2 right-2 text-[9px] uppercase tracking-wider font-bold bg-[#FBAE17] text-black px-1.5 py-0.5">{matName(f.material_id)}</span>
             </div>
-            <div className="p-5 flex-1 flex flex-col">
-              <div className="text-[10px] uppercase tracking-[0.22em] text-zinc-500 font-bold mb-1">{f.product_type || "Family"}</div>
-              <h3 className="font-heading font-black text-base text-[#1A1A1A] leading-snug line-clamp-2">{f.family_name}</h3>
-              <div className="text-xs text-zinc-500 mt-2 line-clamp-2">{f.specification_description || f.material_description}</div>
-              <div className="mt-4 flex items-center justify-between pt-3 border-t border-zinc-100">
-                <Link to={`/product-families/${f.id}`} className="text-xs uppercase tracking-wider font-bold text-[#1A1A1A] hover:text-[#FBAE17] flex items-center gap-1" data-testid={`family-view-${f.id}`}>
-                  View Details <ArrowRight size={14} weight="bold" />
+            <div className="p-3 flex-1 flex flex-col">
+              <div className="text-[9px] uppercase tracking-[0.18em] text-zinc-500 font-bold mb-1 truncate">{f.product_type || "Family"}</div>
+              <h3 className="font-heading font-black text-xs text-[#1A1A1A] leading-snug line-clamp-3" title={f.family_name}>{f.family_name}</h3>
+              <div className="mt-3 flex items-center justify-between pt-2 border-t border-zinc-100">
+                <Link to={`/product-families/${f.id}`} className="text-[10px] uppercase tracking-wider font-bold text-[#1A1A1A] hover:text-[#FBAE17] flex items-center gap-1" data-testid={`family-view-${f.id}`}>
+                  View <ArrowRight size={12} weight="bold" />
                 </Link>
-                <div className="flex items-center gap-3">
-                  <button onClick={() => setEdit({ ...f })} className="text-zinc-500 hover:text-[#FBAE17]" data-testid={`family-edit-${f.id}`}><PencilSimple size={16} /></button>
-                  <button onClick={() => remove(f)} className="text-zinc-400 hover:text-red-600" data-testid={`family-delete-${f.id}`}><Trash size={16} /></button>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setEdit({ ...f })} className="text-zinc-500 hover:text-[#FBAE17]" data-testid={`family-edit-${f.id}`}><PencilSimple size={14} /></button>
+                  <button onClick={() => remove(f)} className="text-zinc-400 hover:text-red-600" data-testid={`family-delete-${f.id}`}><Trash size={14} /></button>
                 </div>
               </div>
             </div>
