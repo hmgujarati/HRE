@@ -28,12 +28,8 @@ export default function Sidebar() {
   return (
     <aside className="sidebar-dark fixed left-0 top-0 h-screen w-64 bg-[#1A1A1A] text-white flex flex-col border-r border-zinc-900 z-40" data-testid="sidebar">
       {/* Brand */}
-      <div className="px-6 py-5 border-b border-zinc-800 flex items-center gap-3">
-        <img src="/hre-logo.png" alt="HREXPORTER" className="w-11 h-11 object-contain shrink-0" data-testid="sidebar-logo" />
-        <div className="leading-tight">
-          <div className="font-heading font-black text-white text-base tracking-tight">HREXPORTER</div>
-          <div className="text-[10px] uppercase tracking-[0.22em] text-[#FBAE17] font-bold">ISO 9001 · CRM</div>
-        </div>
+      <div className="px-6 py-6 border-b border-zinc-800 flex items-center justify-center">
+        <img src="/hre-logo-dark-bg.png" alt="HREXPORTER · An ISO 9001 Company" className="h-16 object-contain" data-testid="sidebar-logo" />
       </div>
 
       {/* Nav */}
