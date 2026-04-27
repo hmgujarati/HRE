@@ -8,11 +8,13 @@ import os
 import uuid
 import shutil
 import logging
+from io import BytesIO
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Any, Dict
 
 import bcrypt
 import jwt
+import openpyxl
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -355,6 +357,192 @@ async def upload_dim_drawing(fid: str, file: UploadFile = File(...), user: dict 
 async def upload_cat_ref(fid: str, file: UploadFile = File(...), user: dict = Depends(require_role("admin", "manager"))):
     url = await _save_upload_for_family(fid, file, "catalogue_reference_image")
     return {"url": url}
+
+
+# ---------- Excel/CSV Variant Bulk Upload ----------
+def _norm(s: Any) -> str:
+    return str(s or "").strip().lower().replace(".", "").replace(" ", "")
+
+
+def _parse_variant_workbook(content: bytes) -> tuple[list[str], list[list[Any]]]:
+    """Return (header_keys, data_rows). Detects header row by looking for cable/prod columns.
+    Headers may span 2 rows (merged 'DIMENSIONS' label) — we pick the row with the most named cells.
+    """
+    wb = openpyxl.load_workbook(BytesIO(content), data_only=True)
+    ws = wb.active
+    rows = [list(r) for r in ws.iter_rows(values_only=True)]
+    if not rows:
+        raise HTTPException(status_code=400, detail="Empty workbook")
+
+    # Find header row: first row that contains any of cable/hole/prod/code keywords
+    header_idx = None
+    for i, row in enumerate(rows[:5]):
+        norm = [_norm(c) for c in row]
+        joined = "|".join(norm)
+        if any(k in joined for k in ["cable", "prod", "code"]) and any(c in {"a", "b", "c", "d", "e", "f", "g", "h", "j", "k", "l", "l1"} for c in norm):
+            header_idx = i
+            break
+    if header_idx is None:
+        # fall back: first non-empty row is header
+        for i, row in enumerate(rows):
+            if any(c is not None and str(c).strip() for c in row):
+                header_idx = i
+                break
+    if header_idx is None:
+        raise HTTPException(status_code=400, detail="Could not detect header row")
+
+    # If next row also has many letters/keywords, merge them (ie DIMENSIONS spanning row)
+    raw_header = rows[header_idx]
+    next_row = rows[header_idx + 1] if header_idx + 1 < len(rows) else []
+    merged: list[str] = []
+    for col_i, cell in enumerate(raw_header):
+        c = (str(cell).strip() if cell is not None else "")
+        # If header is empty or "DIMENSIONS" or generic, look at next row
+        if not c or c.lower() == "dimensions":
+            nxt = next_row[col_i] if col_i < len(next_row) else None
+            c = (str(nxt).strip() if nxt is not None else c)
+        merged.append(c)
+
+    # Determine if next_row was header continuation (skip it) — heuristic: if at least 2 of merged came from next_row
+    used_next = sum(1 for col_i in range(len(raw_header)) if not (raw_header[col_i] and str(raw_header[col_i]).strip() and str(raw_header[col_i]).strip().lower() != "dimensions"))
+    data_start = header_idx + (2 if used_next >= 2 and header_idx + 1 < len(rows) else 1)
+    data = rows[data_start:]
+    # filter blank rows
+    data = [r for r in data if any(c is not None and str(c).strip() != "" for c in r)]
+    return merged, data
+
+
+def _classify_header(h: str) -> str:
+    """Return 'cable'|'hole'|'code'|'dim:<key>'|'skip'."""
+    n = _norm(h)
+    if not n:
+        return "skip"
+    if "cable" in n or n == "mm2" or "size" in n and "hole" not in n:
+        return "cable"
+    if "hole" in n or n == "e":
+        return "hole"
+    if "prod" in n or "code" in n:
+        return "code"
+    # treat as dimension key, preserve original label (strip whitespace)
+    return f"dim:{h.strip()}"
+
+
+@api.post("/product-families/{fid}/upload-variants-excel")
+async def upload_variants_excel(
+    fid: str,
+    file: UploadFile = File(...),
+    user: dict = Depends(require_role("admin", "manager")),
+):
+    family = await db.product_families.find_one({"id": fid}, {"_id": 0})
+    if not family:
+        raise HTTPException(status_code=404, detail="Family not found")
+    fname_lower = (file.filename or "").lower()
+    if not (fname_lower.endswith(".xlsx") or fname_lower.endswith(".xlsm")):
+        raise HTTPException(status_code=400, detail="Please upload a .xlsx file")
+
+    content = await file.read()
+    try:
+        headers, data_rows = _parse_variant_workbook(content)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse file: {e}")
+
+    # Map column index → role
+    col_roles = [_classify_header(h) for h in headers]
+    if "code" not in col_roles:
+        raise HTTPException(status_code=400, detail="Could not find a 'Product Code' / 'Prod. Code' column in the spreadsheet")
+
+    created = 0
+    updated = 0
+    skipped = 0
+    errors: list[str] = []
+
+    for row_idx, row in enumerate(data_rows, start=1):
+        try:
+            cable, hole, code = "", "", ""
+            dims: Dict[str, str] = {}
+            for ci, role in enumerate(col_roles):
+                val = row[ci] if ci < len(row) else None
+                if val is None:
+                    continue
+                sval = str(val).strip()
+                if not sval:
+                    continue
+                if role == "cable":
+                    cable = sval
+                elif role == "hole":
+                    hole = sval
+                elif role == "code":
+                    code = sval
+                elif role.startswith("dim:"):
+                    key = role.split(":", 1)[1]
+                    dims[key] = sval
+                # 'skip' ignored
+            if not code:
+                skipped += 1
+                continue
+            # Normalise cable size: append mm² if pure number
+            if cable and not any(unit in cable.lower() for unit in ["mm", "sq", "²", "2"]):
+                cable_disp = f"{cable} mm²"
+            else:
+                cable_disp = cable
+
+            existing = await db.product_variants.find_one({"product_code": code}, {"_id": 0})
+            if existing:
+                upd = {
+                    "cable_size": cable_disp or existing.get("cable_size", ""),
+                    "hole_size": hole or existing.get("hole_size", ""),
+                    "dimensions": dims or existing.get("dimensions", {}),
+                    "product_family_id": fid,
+                    "material_id": family["material_id"],
+                    "category_id": family["category_id"],
+                    "subcategory_id": family.get("subcategory_id"),
+                    "updated_at": now_iso(),
+                }
+                await db.product_variants.update_one({"id": existing["id"]}, {"$set": upd})
+                updated += 1
+            else:
+                doc = {
+                    "id": str(uuid.uuid4()),
+                    "product_family_id": fid,
+                    "product_code": code,
+                    "product_name": "",
+                    "material_id": family["material_id"],
+                    "category_id": family["category_id"],
+                    "subcategory_id": family.get("subcategory_id"),
+                    "cable_size": cable_disp,
+                    "hole_size": hole,
+                    "size": "",
+                    "unit": "NOS",
+                    "hsn_code": "85369090",
+                    "gst_percentage": 18.0,
+                    "base_price": 0.0,
+                    "discount_percentage": 0.0,
+                    "manual_price_override": False,
+                    "manual_price": None,
+                    "minimum_order_quantity": 100,
+                    "dimensions": dims,
+                    "notes": "",
+                    "active": True,
+                    "final_price": 0.0,
+                    "created_at": now_iso(),
+                    "updated_at": now_iso(),
+                }
+                await db.product_variants.insert_one(doc.copy())
+                await _record_price_history({}, doc, user["email"], "Variant imported from Excel")
+                created += 1
+        except Exception as e:
+            errors.append(f"Row {row_idx}: {e}")
+            skipped += 1
+
+    return {
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "headers_detected": headers,
+        "errors": errors[:20],
+    }
 
 
 # ---------- Product Variants ----------

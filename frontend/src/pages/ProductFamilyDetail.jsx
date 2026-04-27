@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import api, { formatApiError, fileUrl } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
-import { ArrowLeft, UploadSimple, Image as ImageIcon, Plus } from "@phosphor-icons/react";
+import { ArrowLeft, UploadSimple, Image as ImageIcon, Plus, FileXls, CheckCircle } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import VariantFormDialog from "@/components/VariantFormDialog";
 
@@ -119,13 +119,16 @@ export default function ProductFamilyDetail() {
                 <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Catalogue</div>
                 <h3 className="font-heading font-black text-lg">Variants ({variants.length})</h3>
               </div>
-              <button
-                onClick={() => setVariantOpen({ family })}
-                data-testid="family-add-variant-btn"
-                className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-4 py-2 flex items-center gap-2"
-              >
-                <Plus size={14} weight="bold" /> Add Variant
-              </button>
+              <div className="flex items-center gap-2">
+                <ExcelImport familyId={family.id} onDone={load} />
+                <button
+                  onClick={() => setVariantOpen({ family })}
+                  data-testid="family-add-variant-btn"
+                  className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-4 py-2 flex items-center gap-2"
+                >
+                  <Plus size={14} weight="bold" /> Add Variant
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -177,5 +180,95 @@ function Spec({ label, value, span }) {
       <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-zinc-500 mb-0.5">{label}</div>
       <div className="text-sm text-[#1A1A1A]">{value || <span className="text-zinc-300">—</span>}</div>
     </div>
+  );
+}
+
+function ExcelImport({ familyId, onDone }) {
+  const ref = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const handle = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    e.target.value = "";
+    setBusy(true);
+    setResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const { data } = await api.post(`/product-families/${familyId}/upload-variants-excel`, fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setResult(data);
+      toast.success(`Imported ${data.created} new, updated ${data.updated}`);
+      onDone && onDone();
+    } catch (err) {
+      toast.error(formatApiError(err?.response?.data?.detail));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => ref.current?.click()}
+        disabled={busy}
+        data-testid="family-excel-import-btn"
+        className="border border-zinc-300 hover:border-[#FBAE17] hover:bg-zinc-50 text-zinc-800 font-bold uppercase tracking-wider text-xs px-4 py-2 flex items-center gap-2 disabled:opacity-60 transition-colors"
+        title="Import variants from Excel (.xlsx)"
+      >
+        <FileXls size={14} weight="bold" /> {busy ? "Importing…" : "Import Excel"}
+      </button>
+      <input ref={ref} type="file" accept=".xlsx,.xlsm" className="hidden" onChange={handle} />
+      {result && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-6" onClick={() => setResult(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="bg-white w-full max-w-lg border border-zinc-200" data-testid="excel-import-result">
+            <div className="px-6 py-4 border-b border-zinc-200 flex items-center gap-2">
+              <CheckCircle size={18} weight="fill" className="text-emerald-600" />
+              <h3 className="font-heading font-black text-lg">Import Complete</h3>
+            </div>
+            <div className="p-6 space-y-3">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="border border-zinc-200 p-3">
+                  <div className="text-[10px] uppercase tracking-wider font-bold text-zinc-500">Created</div>
+                  <div className="font-heading font-black text-2xl text-emerald-600">{result.created}</div>
+                </div>
+                <div className="border border-zinc-200 p-3">
+                  <div className="text-[10px] uppercase tracking-wider font-bold text-zinc-500">Updated</div>
+                  <div className="font-heading font-black text-2xl text-[#FBAE17]">{result.updated}</div>
+                </div>
+                <div className="border border-zinc-200 p-3">
+                  <div className="text-[10px] uppercase tracking-wider font-bold text-zinc-500">Skipped</div>
+                  <div className="font-heading font-black text-2xl text-zinc-400">{result.skipped}</div>
+                </div>
+              </div>
+              {result.headers_detected && (
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1">Detected Columns</div>
+                  <div className="flex flex-wrap gap-1">
+                    {result.headers_detected.filter(Boolean).map((h, i) => (
+                      <span key={i} className="text-[10px] uppercase tracking-wider font-bold bg-zinc-100 text-zinc-700 px-2 py-0.5 font-mono">{h}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {result.errors?.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900 max-h-32 overflow-y-auto">
+                  {result.errors.map((e, i) => <div key={i}>{e}</div>)}
+                </div>
+              )}
+              <p className="text-xs text-zinc-500 pt-2 border-t border-zinc-100">
+                Tip: column headers can be Cable Size, Hole, Prod. Code, plus any dimension keys (A, B, C, D, F, H, K, L1, J, etc.). Prices default to ₹0 — set them via Edit Variant or Bulk Discount.
+              </p>
+            </div>
+            <div className="px-6 py-3 border-t border-zinc-200 flex justify-end">
+              <button onClick={() => setResult(null)} className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-4 py-2">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
