@@ -1,0 +1,76 @@
+{
+  "summary": "Backend testing for HRE Exporter CRM Phase 1. 28/30 tests passed (2 skipped previously, all role tests now passing). Identified 1 real backend bug: initial price history is NOT recorded on POST /api/product-variants. All other endpoints (auth, materials, categories, families, image upload, variants CRUD with manual override + computed final_price, filters, bulk discount preview/apply for material/category/family, role enforcement, dashboard stats, price-history) work correctly with the seeded data (2 materials, nested categories, 3 families, 9 variants).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/product-variants",
+        "issue": "Initial price history entry NOT recorded on variant creation. Root cause: in server.py `_record_price_history`, the early-return guard `if not variant_before: return` is truthy for an empty dict `{}` (which create_variant passes). So no history is inserted on create. Spec says 'records initial price history'. Fix: change guard to `if variant_before is None: return`. This also means GET /api/product-variants/{id}/price-history returns [] right after a create until the first update.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "calc_final_price (server.py)",
+        "issue": "Floating-point rounding produces inconsistent paise values. e.g. base=4.50, discount=5% computes 4.5 - 0.225 = 4.2750000000000004 -> round(.,2) = 4.28. Banker's rounding + FP imprecision causes 4.27 vs 4.28 ambiguity. Suggest using Decimal with ROUND_HALF_UP for INR price to avoid customer-visible inconsistencies."
+      },
+      {
+        "endpoint": "POST /api/pricing/bulk-discount/preview",
+        "issue": "Body type is `data: dict` (no Pydantic schema). Should validate scope ∈ {material, category, product_family} via a Pydantic model and require target_id."
+      },
+      {
+        "endpoint": "/api/auth/login",
+        "issue": "No rate limiting / brute force lockout. Auth playbook recommends lockout after N failed attempts. Currently unlimited attempts return 401."
+      },
+      {
+        "endpoint": "/api/auth/* + global",
+        "issue": "FastAPI on_event('startup'/'shutdown') is deprecated. Use lifespan context. Cosmetic only."
+      },
+      {
+        "endpoint": "DELETE /api/materials, /api/categories, /api/product-families",
+        "issue": "No referential integrity check. Deleting a material/category does not check if variants/families reference it. Could orphan data."
+      },
+      {
+        "endpoint": "POST /api/product-families/{id}/upload-*",
+        "issue": "Uses `file.filename` extension only for type check; no MIME/magic-byte verification. Old files are not deleted when a new image overwrites the URL."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_hre_crm_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix _record_price_history early-return bug in /app/backend/server.py: replace `if not variant_before:` with `if variant_before is None:` so that the initial create entry is persisted.",
+    "Consider switching price math to Decimal/ROUND_HALF_UP for stable INR rounding.",
+    "Add Pydantic schema for /api/pricing/bulk-discount/preview body."
+  ],
+  "critical_code_review_comments": [
+    "BUG: server.py:362 `if not variant_before: return` blocks initial price history (empty dict is falsy).",
+    "Pricing rounding uses Python's banker's rounding on float; switch to Decimal for currency.",
+    "/api/pricing/bulk-discount/preview takes raw dict; lacks input validation.",
+    "No referential integrity on DELETE for material/category/family.",
+    "Image upload validates only filename extension (no MIME/magic). Old uploaded files not cleaned up on replace.",
+    "Auth has no brute-force protection (no lockout).",
+    "Deprecated FastAPI on_event hooks (use lifespan).",
+    "JWT expiry is 24h with no refresh endpoint; acceptable for Phase 1 but worth noting."
+  ],
+  "updated_files": [
+    "/app/backend/tests/__init__.py",
+    "/app/backend/tests/test_hre_crm_backend.py"
+  ],
+  "success_rate": {
+    "backend": "93% (28/30 tests passing; 2 failures both caused by 1 backend bug)",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "admin@hrexporter.com / Admin@123 (admin); TEST_employee@hrexporter.com / EmpPass@123 (employee, seeded by test for role check)",
+  "seed_data_creation": "Test creates a TEST_employee@hrexporter.com user directly in MongoDB (employees role) for 403-enforcement tests. TEST_-prefixed materials/categories/families/variants are created and cleaned up within the same test class. Note: bulk-discount tests mutate seeded variant prices (final_price/discount_percentage) — the seed final_prices are no longer pristine after a test run.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All endpoints listed in the request work except initial-create price history. After main agent fixes the `if not variant_before` guard, re-run `pytest /app/backend/tests/test_hre_crm_backend.py -v` and the 2 failing tests (test_create_variant_records_history, test_update_variant_price_history) should pass. Bulk-discount tests mutate seeded prices in-place — if pristine seeded prices are needed, drop & re-seed the database before testing. The pymongo dependency is already installed and used in the employee-fixture to create a TEST_ employee user directly in MongoDB.",
+  "rca of the issue": "RCA: In /app/backend/server.py, `_record_price_history(variant_before, variant_after, ...)` starts with `if not variant_before: return`. The create_variant route calls it as `_record_price_history({}, doc, ...)`. An empty dict is falsy in Python, so the function returns immediately and no history is inserted for the create event. Reproduction: POST /api/product-variants with valid payload, then GET /api/product-variants/{id}/price-history -> returns []. Mitigation: change guard to `if variant_before is None: return` (and keep the subsequent diff check intact). Updates already work correctly; only the initial create entry is missing."
+}
