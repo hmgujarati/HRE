@@ -37,12 +37,10 @@ export default function Login() {
             'linear-gradient(#FBAE17 1px, transparent 1px), linear-gradient(90deg, #FBAE17 1px, transparent 1px)',
           backgroundSize: '32px 32px',
         }} />
-        <div className="relative z-10 flex items-center gap-3">
-          <div className="w-10 h-10 bg-[#FBAE17] flex items-center justify-center">
-            <span className="font-heading font-black text-black text-lg">H</span>
-          </div>
+        <div className="relative z-10 flex items-center gap-4">
+          <img src="/hre-logo.png" alt="HREXPORTER" className="w-14 h-14 object-contain" data-testid="login-logo-large" />
           <div className="leading-tight">
-            <div className="font-heading font-black text-xl tracking-tight">HRE EXPORTER</div>
+            <div className="font-heading font-black text-xl tracking-tight">HREXPORTER</div>
             <div className="text-[10px] uppercase tracking-[0.22em] text-[#FBAE17] font-bold">ISO 9001 Manufacturing</div>
           </div>
         </div>
@@ -80,10 +78,8 @@ export default function Login() {
       <div className="flex items-center justify-center p-8">
         <form onSubmit={submit} className="w-full max-w-md" data-testid="login-form">
           <div className="lg:hidden flex items-center gap-3 mb-10">
-            <div className="w-9 h-9 bg-[#FBAE17] flex items-center justify-center">
-              <span className="font-heading font-black text-black">H</span>
-            </div>
-            <div className="font-heading font-black text-lg">HRE EXPORTER</div>
+            <img src="/hre-logo.png" alt="HREXPORTER" className="w-10 h-10 object-contain" />
+            <div className="font-heading font-black text-lg">HREXPORTER</div>
           </div>
 
           <div className="text-[10px] uppercase tracking-[0.22em] text-[#FBAE17] font-bold mb-3">Sign in</div>

@@ -18,7 +18,7 @@ export default function Settings() {
         </div>
         <div className="border border-zinc-200 bg-white p-6">
           <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">Branding</div>
-          <h3 className="font-heading font-black text-lg mb-4">HRE Exporter</h3>
+          <h3 className="font-heading font-black text-lg mb-4">HREXPORTER</h3>
           <div className="grid grid-cols-3 gap-3 text-xs">
             <div><div className="h-12 bg-[#FBAE17]" /><div className="font-mono mt-1">#FBAE17</div></div>
             <div><div className="h-12 bg-[#1A1A1A]" /><div className="font-mono mt-1">#1A1A1A</div></div>
