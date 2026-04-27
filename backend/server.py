@@ -334,7 +334,7 @@ async def _save_upload_for_family(fid: str, file: UploadFile, field: str) -> str
     path = UPLOAD_DIR / fname
     with path.open("wb") as f:
         shutil.copyfileobj(file.file, f)
-    rel = f"/uploads/{fname}"
+    rel = f"/api/uploads/{fname}"
     await db.product_families.update_one({"id": fid}, {"$set": {field: rel, "updated_at": now_iso()}})
     return rel
 
@@ -557,7 +557,7 @@ async def dashboard_stats(_: dict = Depends(get_current_user)):
 
 # ---------- Mount ----------
 app.include_router(api)
-app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+app.mount("/api/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
