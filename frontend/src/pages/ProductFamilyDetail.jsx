@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import api, { formatApiError, fileUrl } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
-import { ArrowLeft, UploadSimple, Image as ImageIcon, Plus, FileXls, CheckCircle } from "@phosphor-icons/react";
+import { ArrowLeft, UploadSimple, Image as ImageIcon, Plus, FileXls, CheckCircle, PencilSimple, Trash, Warning } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import VariantFormDialog from "@/components/VariantFormDialog";
 
@@ -89,6 +89,31 @@ export default function ProductFamilyDetail() {
     await load();
   };
 
+  const removeVariant = async (v) => {
+    if (!window.confirm(`Delete variant ${v.product_code}? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/product-variants/${v.id}`);
+      toast.success(`Deleted ${v.product_code}`);
+      await load();
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail));
+    }
+  };
+
+  const removeAllVariants = async () => {
+    if (!variants.length) return;
+    if (!window.confirm(`Delete ALL ${variants.length} variants in this family? This cannot be undone.`)) return;
+    if (!window.confirm("Really delete every variant? Type confirms only — last chance to cancel.")) return;
+    try {
+      const results = await Promise.allSettled(variants.map((v) => api.delete(`/product-variants/${v.id}`)));
+      const ok = results.filter((r) => r.status === "fulfilled").length;
+      toast.success(`Deleted ${ok} of ${variants.length} variants`);
+      await load();
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail));
+    }
+  };
+
   if (!family) return <div className="p-8 text-zinc-400">Loading…</div>;
 
   const matName = mats.find((m) => m.id === family.material_id)?.material_name;
@@ -135,6 +160,16 @@ export default function ProductFamilyDetail() {
               </div>
               <div className="flex items-center gap-2">
                 <ExcelImport familyId={family.id} onDone={load} />
+                {variants.length > 0 && (
+                  <button
+                    onClick={removeAllVariants}
+                    data-testid="family-delete-all-btn"
+                    className="border border-red-300 text-red-600 hover:bg-red-50 font-bold uppercase tracking-wider text-xs px-3 py-2 flex items-center gap-2 transition-colors"
+                    title="Delete all variants in this family"
+                  >
+                    <Warning size={14} weight="bold" /> Delete All
+                  </button>
+                )}
                 <button
                   onClick={() => setVariantOpen({ family })}
                   data-testid="family-add-variant-btn"
@@ -153,6 +188,7 @@ export default function ProductFamilyDetail() {
                     <th className="px-4 py-3">Hole</th>
                     {dimKeys.map((k) => <th key={k} className="px-3 py-3 font-mono">{k}</th>)}
                     <th className="px-4 py-3 text-right">Final ₹</th>
+                    <th className="px-4 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -163,10 +199,28 @@ export default function ProductFamilyDetail() {
                       <td className="px-4 py-2 font-mono">{v.hole_size || '—'}</td>
                       {dimKeys.map((k) => <td key={k} className="px-3 py-2 font-mono text-zinc-600">{v.dimensions?.[k] ?? ''}</td>)}
                       <td className="px-4 py-2 text-right font-mono font-bold">₹{v.final_price}</td>
+                      <td className="px-4 py-2 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => setVariantOpen({ family, existing: v })}
+                          className="text-zinc-500 hover:text-[#FBAE17] mr-3"
+                          data-testid={`fam-variant-edit-${v.id}`}
+                          title="Edit variant"
+                        >
+                          <PencilSimple size={14} />
+                        </button>
+                        <button
+                          onClick={() => removeVariant(v)}
+                          className="text-zinc-400 hover:text-red-600"
+                          data-testid={`fam-variant-delete-${v.id}`}
+                          title="Delete variant"
+                        >
+                          <Trash size={14} />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                   {!variants.length && (
-                    <tr><td colSpan={dimKeys.length + 4} className="px-6 py-8 text-center text-zinc-400">No variants yet.</td></tr>
+                    <tr><td colSpan={dimKeys.length + 5} className="px-6 py-8 text-center text-zinc-400">No variants yet.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -177,7 +231,8 @@ export default function ProductFamilyDetail() {
 
       {variantOpen && (
         <VariantFormDialog
-          initial={{ product_family_id: family.id, material_id: family.material_id, category_id: family.category_id, subcategory_id: family.subcategory_id }}
+          existing={variantOpen.existing || null}
+          initial={!variantOpen.existing ? { product_family_id: family.id, material_id: family.material_id, category_id: family.category_id, subcategory_id: family.subcategory_id } : null}
           onClose={() => setVariantOpen(null)}
           onSaved={load}
           mats={mats}
