@@ -1,0 +1,148 @@
+{
+  "project_name": "HRE Exporter CRM Admin Dashboard - Phase 1",
+  "theme": {
+    "mode": "light",
+    "archetype": "4 (Swiss & High-Contrast)",
+    "description": "Clean industrial B2B dashboard, bold typography, sharp geometric feel, catalogue style, white background with dark sidebar and yellow highlights. Precision engineering feel."
+  },
+  "colors": {
+    "background": {
+      "main": "#FFFFFF",
+      "secondary": "#F9F9F9",
+      "sidebar": "#1A1A1A",
+      "table_header": "#F3F4F6",
+      "zebra_stripe": "#FAFAFA"
+    },
+    "primary": {
+      "DEFAULT": "#FBAE17",
+      "hover": "#E59D12",
+      "active": "#CC8B10",
+      "foreground": "#000000"
+    },
+    "text": {
+      "primary": "#1A1A1A",
+      "secondary": "#52525B",
+      "muted": "#A1A1AA",
+      "sidebar_active": "#FBAE17",
+      "sidebar_inactive": "#A1A1AA",
+      "sidebar_hover": "#FFFFFF",
+      "inverse": "#FFFFFF"
+    },
+    "border": {
+      "DEFAULT": "#E4E4E7",
+      "dark": "#27272A",
+      "focus": "#FBAE17"
+    },
+    "status": {
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "error": "#EF4444",
+      "info": "#3B82F6"
+    }
+  },
+  "typography": {
+    "fonts": {
+      "heading": "Chivo, sans-serif",
+      "body": "Inter, sans-serif",
+      "mono": "JetBrains Mono, monospace"
+    },
+    "hierarchy": {
+      "h1": "text-4xl font-bold tracking-tight",
+      "h2": "text-2xl font-bold tracking-tight",
+      "h3": "text-xl font-bold tracking-tight",
+      "h4": "text-lg font-bold tracking-tight",
+      "body": "text-sm",
+      "small": "text-xs",
+      "overline": "text-xs font-bold uppercase tracking-[0.2em]"
+    }
+  },
+  "spacing": {
+    "container": "p-8",
+    "section": "gap-8",
+    "component": "gap-4",
+    "element": "gap-2"
+  },
+  "layout": {
+    "type": "sidebar_dashboard",
+    "sidebar_width": "w-64",
+    "content_area": "flex-1 bg-white",
+    "grid_system": {
+      "dashboard_stats": "grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4",
+      "catalogue_grid": "grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6"
+    }
+  },
+  "components": {
+    "surfaces": {
+      "style": "flat_geometric",
+      "radius": "rounded-none",
+      "shadow": "shadow-none",
+      "border": "border border-zinc-200"
+    },
+    "buttons": {
+      "primary": "bg-[#FBAE17] text-black hover:bg-[#E59D12] rounded-none font-bold px-6 py-2 transition-colors",
+      "secondary": "bg-transparent border border-zinc-300 text-zinc-900 hover:bg-zinc-100 rounded-none px-6 py-2 transition-colors",
+      "ghost": "bg-transparent text-zinc-600 hover:text-black hover:bg-zinc-100 rounded-none px-4 py-2 transition-colors"
+    },
+    "inputs": {
+      "style": "border border-zinc-300 rounded-none px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-[#FBAE17] focus:border-transparent transition-all",
+      "label": "text-xs font-bold text-zinc-700 uppercase tracking-wider mb-1 block"
+    },
+    "tables": {
+      "header": "bg-zinc-100 text-zinc-700 text-xs font-bold uppercase tracking-wider border-b-2 border-zinc-300 py-3 px-4",
+      "row": "border-b border-zinc-200 hover:bg-zinc-50 transition-colors",
+      "cell": "py-3 px-4 text-sm text-zinc-800",
+      "zebra": "even:bg-zinc-50/50"
+    },
+    "sidebar": {
+      "container": "bg-[#1A1A1A] text-white flex flex-col h-screen fixed w-64 border-r border-zinc-800",
+      "logo_area": "p-6 border-b border-zinc-800",
+      "nav_item": "flex items-center px-6 py-3 text-sm font-medium transition-colors cursor-pointer",
+      "nav_item_active": "bg-zinc-800/50 text-[#FBAE17] border-r-4 border-[#FBAE17]",
+      "nav_item_inactive": "text-zinc-400 hover:text-white hover:bg-zinc-800/30",
+      "nav_item_disabled": "text-zinc-600 cursor-not-allowed opacity-50"
+    },
+    "cards": {
+      "stat_card": "p-6 border border-zinc-200 bg-white flex flex-col justify-between"
+    }
+  },
+  "media": {
+    "images": [
+      {
+        "category": "login_background",
+        "url": "https://images.unsplash.com/photo-1764114908655-9a26d32750a0?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzN8MHwxfHNlYXJjaHwyfHxpbmR1c3RyaWFsJTIwbWFudWZhY3R1cmluZyUyMGZhY3RvcnklMjBtYWNoaW5lfGVufDB8fHx8MTc3NzI2MzEyN3ww&ixlib=rb-4.1.0&q=85",
+        "description": "Industrial factory floor with heavy machinery for login page background"
+      },
+      {
+        "category": "product_placeholder",
+        "url": "https://images.pexels.com/photos/28286038/pexels-photo-28286038.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Copper wires, texture, can be used as generic placeholder for products"
+      }
+    ]
+  },
+  "icons": {
+    "library": "@phosphor-icons/react",
+    "weight": "regular",
+    "instructions": "Use Phosphor Icons for their clean, industrial geometric look that matches the B2B tech aesthetic."
+  },
+  "motion": {
+    "transitions": "transition-all duration-200 ease-in-out",
+    "hover_effects": "opacity change or subtle background change. Avoid bouncy or dramatic transforms.",
+    "page_load": "fade in, subtle slide up for lists"
+  },
+  "testing": {
+    "attributes": "All interactive elements (buttons, nav links, table rows, form inputs) MUST include data-testid attributes formatted as kebab-case-role."
+  },
+  "instructions_to_main_agent": [
+    "Install required fonts from Google Fonts: 'Chivo' and 'Inter'.",
+    "Install icon library: yarn add @phosphor-icons/react",
+    "Configure tailwind.config.js with provided colors (#1A1A1A, #FBAE17, etc.) and fonts.",
+    "Do NOT use soft rounded corners (`rounded-lg`, `rounded-xl`). Stick to `rounded-none` or max `rounded-sm` for a sharp industrial feel.",
+    "The Sidebar must be dark (#1A1A1A) with white logo text 'HRE EXPORTER'. Active state should use the yellow highlight #FBAE17.",
+    "Data tables must look like technical catalogues: dense, clear borders, left-aligned text, monospaced fonts for technical dimensions if applicable.",
+    "Implement JWT Auth context and wrap the application.",
+    "Mock API responses for Dashboard Stats, Product Families, Variants, Categories, and Materials.",
+    "Use Shadcn UI components but override their default rounded corners to `rounded-none`.",
+    "Build the nested tree structure for Categories management using a recursive component or collapsible Shadcn Accordion/List.",
+    "For product variants, support dynamic JSON columns for dimension specifications."
+  ]
+}
