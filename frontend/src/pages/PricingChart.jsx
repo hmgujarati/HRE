@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
-import { MagnifyingGlass, Plus, PencilSimple, Trash, ClockCounterClockwise, Lightning, Funnel } from "@phosphor-icons/react";
+import { MagnifyingGlass, Plus, PencilSimple, Trash, ClockCounterClockwise, Lightning, Funnel, FileXls, CheckCircle } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import VariantFormDialog from "@/components/VariantFormDialog";
 import PriceHistoryModal from "@/components/PriceHistoryModal";
@@ -60,6 +60,7 @@ export default function PricingChart() {
         testId="pricing-header"
         actions={
           <div className="flex items-center gap-2">
+            <PriceImport onDone={load} />
             <button onClick={() => setBulk(true)} data-testid="bulk-discount-btn" className="border border-[#FBAE17] text-[#1A1A1A] hover:bg-[#FBAE17] font-bold uppercase tracking-wider text-xs px-4 py-3 flex items-center gap-2 transition-colors">
               <Lightning size={14} weight="fill" /> Bulk Discount
             </button>
@@ -170,5 +171,99 @@ export default function PricingChart() {
       {historyId && <PriceHistoryModal variantId={historyId} onClose={() => setHistoryId(null)} />}
       {bulk && <BulkDiscountDialog mats={mats} cats={cats} families={families} onClose={() => setBulk(false)} onApplied={load} />}
     </div>
+  );
+}
+
+function PriceImport({ onDone }) {
+  const ref = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const handle = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    e.target.value = "";
+    setBusy(true);
+    setResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const { data } = await api.post("/pricing/upload-prices-excel", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setResult(data);
+      toast.success(`Updated ${data.updated} prices`);
+      onDone && onDone();
+    } catch (err) {
+      toast.error(formatApiError(err?.response?.data?.detail));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => ref.current?.click()}
+        disabled={busy}
+        data-testid="pricing-import-prices-btn"
+        className="border border-zinc-300 hover:border-[#FBAE17] hover:bg-zinc-50 text-zinc-800 font-bold uppercase tracking-wider text-xs px-4 py-3 flex items-center gap-2 disabled:opacity-60 transition-colors"
+        title="Bulk update prices from Excel (.xlsx)"
+      >
+        <FileXls size={14} weight="bold" /> {busy ? "Importing…" : "Import Prices"}
+      </button>
+      <input ref={ref} type="file" accept=".xlsx,.xlsm" className="hidden" onChange={handle} />
+      {result && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-6" onClick={() => setResult(null)}>
+          <div onClick={(e) => e.stopPropagation()} className="bg-white w-full max-w-lg border border-zinc-200" data-testid="price-import-result">
+            <div className="px-6 py-4 border-b border-zinc-200 flex items-center gap-2">
+              <CheckCircle size={18} weight="fill" className="text-emerald-600" />
+              <h3 className="font-heading font-black text-lg">Price Import Complete</h3>
+            </div>
+            <div className="p-6 space-y-3">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="border border-zinc-200 p-3">
+                  <div className="text-[10px] uppercase tracking-wider font-bold text-zinc-500">Updated</div>
+                  <div className="font-heading font-black text-2xl text-emerald-600">{result.updated}</div>
+                </div>
+                <div className="border border-zinc-200 p-3">
+                  <div className="text-[10px] uppercase tracking-wider font-bold text-zinc-500">Not Found</div>
+                  <div className="font-heading font-black text-2xl text-amber-600">{result.not_found}</div>
+                </div>
+                <div className="border border-zinc-200 p-3">
+                  <div className="text-[10px] uppercase tracking-wider font-bold text-zinc-500">Skipped</div>
+                  <div className="font-heading font-black text-2xl text-zinc-400">{result.skipped}</div>
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1">Price column used</div>
+                <div className="text-sm font-mono bg-zinc-100 px-2 py-1 inline-block">{result.price_column || "—"}</div>
+              </div>
+              {result.headers_detected && (
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1">All Detected Columns</div>
+                  <div className="flex flex-wrap gap-1">
+                    {result.headers_detected.filter(Boolean).map((h, i) => (
+                      <span key={i} className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 font-mono ${h === result.price_column ? 'bg-[#FBAE17] text-black' : 'bg-zinc-100 text-zinc-700'}`}>{h}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {result.errors?.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900 max-h-32 overflow-y-auto">
+                  {result.errors.map((e, i) => <div key={i}>{e}</div>)}
+                </div>
+              )}
+              <p className="text-xs text-zinc-500 pt-2 border-t border-zinc-100">
+                Tip: column headers can be Cable Size, Hole, Prod. Code, plus a price column labelled <span className="font-mono">Price</span>, <span className="font-mono">Rate</span>, <span className="font-mono">MRP</span>, <span className="font-mono">HRE</span>, or <span className="font-mono">Cost</span>. Final price recalculates from base × discount.
+              </p>
+            </div>
+            <div className="px-6 py-3 border-t border-zinc-200 flex justify-end">
+              <button onClick={() => setResult(null)} className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-4 py-2">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

@@ -369,6 +369,16 @@ def _norm_code(s: Any) -> str:
     return "".join(str(s or "").upper().split())
 
 
+def _is_number(v: Any) -> bool:
+    if v is None:
+        return False
+    try:
+        float(str(v).strip().replace(",", ""))
+        return True
+    except Exception:
+        return False
+
+
 def _parse_variant_workbook(content: bytes) -> tuple[list[str], list[list[Any]]]:
     """Return (header_keys, data_rows). Tolerates 1/2/3-row merged headers
     (e.g. row 0 has 'CABLE SIZE / HOLE E / DIMENSIONS / PROD. CODE' with merged cells,
@@ -435,7 +445,7 @@ def _parse_variant_workbook(content: bytes) -> tuple[list[str], list[list[Any]]]
 
 
 def _classify_header(h: str) -> str:
-    """Return 'cable'|'hole'|'code'|'dim:<key>'|'skip'."""
+    """Return 'cable'|'hole'|'code'|'price'|'dim:<key>'|'skip'."""
     n = _norm(h)
     if not n:
         return "skip"
@@ -445,6 +455,8 @@ def _classify_header(h: str) -> str:
         return "cable"
     if "hole" in n or n == "e":
         return "hole"
+    if any(k in n for k in ["price", "rate", "mrp", "cost", "amount", "hre"]):
+        return "price"
     # treat as dimension key, preserve original label (strip whitespace)
     return f"dim:{h.strip()}"
 
@@ -744,6 +756,114 @@ async def bulk_discount_preview(data: dict, _: dict = Depends(get_current_user))
         raise HTTPException(status_code=400, detail="Invalid scope")
     count = await db.product_variants.count_documents(q)
     return {"count": count}
+
+
+@api.post("/pricing/upload-prices-excel")
+async def upload_prices_excel(
+    file: UploadFile = File(...),
+    user: dict = Depends(require_role("admin", "manager")),
+):
+    """Bulk update base_price by Product Code from an Excel sheet.
+    Columns auto-detected: Product Code (required), Price/Rate/MRP/HRE (required, numeric).
+    Matches variants by normalised product code (ignores spaces/dashes case).
+    """
+    fname_lower = (file.filename or "").lower()
+    if not (fname_lower.endswith(".xlsx") or fname_lower.endswith(".xlsm")):
+        raise HTTPException(status_code=400, detail="Please upload a .xlsx file")
+    content = await file.read()
+    try:
+        headers, data_rows = _parse_variant_workbook(content)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse file: {e}")
+
+    col_roles = [_classify_header(h) for h in headers]
+    if "code" not in col_roles:
+        raise HTTPException(status_code=400, detail="Could not find a 'Product Code' column")
+
+    # Locate the price column. Prefer explicit 'price' classification; else the
+    # rightmost numeric-only unmapped column.
+    price_idx = None
+    for i, r in enumerate(col_roles):
+        if r == "price":
+            price_idx = i
+    if price_idx is None:
+        # Fallback: any column where all non-empty values parse as float
+        for i in range(len(headers) - 1, -1, -1):
+            if col_roles[i] in ("code", "cable", "hole"):
+                continue
+            vals = [r[i] for r in data_rows if i < len(r) and r[i] is not None and str(r[i]).strip()]
+            if vals and all(_is_number(v) for v in vals):
+                price_idx = i
+                break
+    if price_idx is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not detect a price column. Add a column header like 'Price', 'Rate', 'MRP' or 'HRE'.",
+        )
+
+    code_idx = col_roles.index("code")
+    updated = 0
+    not_found = 0
+    skipped = 0
+    errors: list[str] = []
+
+    for row_idx, row in enumerate(data_rows, start=1):
+        try:
+            raw_code = row[code_idx] if code_idx < len(row) else None
+            raw_price = row[price_idx] if price_idx < len(row) else None
+            if raw_code is None or raw_price is None:
+                skipped += 1
+                continue
+            code = " ".join(str(raw_code).strip().split())
+            if not code:
+                skipped += 1
+                continue
+            try:
+                new_base = float(str(raw_price).strip().replace(",", ""))
+            except Exception:
+                skipped += 1
+                continue
+            code_key = _norm_code(code)
+
+            existing = None
+            async for v in db.product_variants.find({}, {"_id": 0}):
+                if _norm_code(v.get("product_code", "")) == code_key:
+                    existing = v
+                    break
+            if not existing:
+                not_found += 1
+                continue
+
+            before = dict(existing)
+            new_final = calc_final_price(
+                new_base,
+                existing.get("discount_percentage", 0.0),
+                existing.get("manual_price_override", False),
+                existing.get("manual_price"),
+            )
+            await db.product_variants.update_one(
+                {"id": existing["id"]},
+                {"$set": {"base_price": new_base, "final_price": new_final, "updated_at": now_iso()}},
+            )
+            after = dict(existing)
+            after["base_price"] = new_base
+            after["final_price"] = new_final
+            await _record_price_history(before, after, user["email"], "Price imported from Excel")
+            updated += 1
+        except Exception as e:
+            errors.append(f"Row {row_idx}: {e}")
+            skipped += 1
+
+    return {
+        "updated": updated,
+        "not_found": not_found,
+        "skipped": skipped,
+        "headers_detected": headers,
+        "price_column": headers[price_idx] if price_idx is not None else None,
+        "errors": errors[:20],
+    }
 
 
 # ---------- Dashboard ----------
