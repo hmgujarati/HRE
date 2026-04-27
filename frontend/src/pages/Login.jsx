@@ -38,7 +38,7 @@ export default function Login() {
           backgroundSize: '32px 32px',
         }} />
         <div className="relative z-10">
-          <img src="/hre-logo-dark-bg.png" alt="HREXPORTER · An ISO 9001 Company" className="h-20 object-contain" data-testid="login-logo-large" />
+          <img src="/hre-logo-dark-bg.png" alt="HREXPORTER · An ISO 9001 Company" className="h-44 w-auto object-contain -ml-3" data-testid="login-logo-large" />
         </div>
 
         <div className="relative z-10 mt-auto">
