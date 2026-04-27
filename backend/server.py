@@ -825,6 +825,13 @@ async def seed_data():
         await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password), "updated_at": now_iso()}})
         logger.info("Admin password updated from env")
 
+    # Catalogue seed runs ONCE on initial install. Once user manages catalogue,
+    # we never recreate deleted records. Toggle the system_meta flag to re-seed.
+    meta = await db.system_meta.find_one({"key": "catalogue_seeded"})
+    if meta and meta.get("value") is True:
+        return
+    logger.info("Seeding initial catalogue (first-run only)…")
+
     # Materials
     mat_seed = [("Copper", "High purity electrolytic copper"), ("Aluminium", "Aluminium alloy")]
     mat_ids = {}
@@ -950,6 +957,14 @@ async def seed_data():
     await upsert_variant("PT-9", fam3, cu, cu_sheet, cu_pin, "1.5 mm²", "-", pin1, 5.50)
     await upsert_variant("PT-1", fam3, cu, cu_sheet, cu_pin, "2.5 mm²", "-", pin2, 6.00)
     await upsert_variant("PT-2", fam3, cu, cu_sheet, cu_pin, "2.5 mm²", "-", pin3, 6.25)
+
+    # Mark catalogue as seeded so subsequent restarts skip the catalogue seed.
+    await db.system_meta.update_one(
+        {"key": "catalogue_seeded"},
+        {"$set": {"key": "catalogue_seeded", "value": True, "seeded_at": now_iso()}},
+        upsert=True,
+    )
+    logger.info("Catalogue seed complete · marked as seeded")
 
 
 @app.on_event("startup")
