@@ -358,11 +358,12 @@ async def upload_cat_ref(fid: str, file: UploadFile = File(...), user: dict = De
 
 
 # ---------- Product Variants ----------
-async def _record_price_history(variant_before: dict, variant_after: dict, changed_by: str, reason: str):
-    if not variant_before:
+async def _record_price_history(variant_before, variant_after: dict, changed_by: str, reason: str):
+    if variant_before is None:
         return
     fields = ["base_price", "discount_percentage", "manual_price", "manual_price_override", "final_price"]
-    if not any(variant_before.get(f) != variant_after.get(f) for f in fields):
+    # for non-empty before dict, only record if something changed
+    if variant_before and not any(variant_before.get(f) != variant_after.get(f) for f in fields):
         return
     entry = {
         "id": str(uuid.uuid4()),
