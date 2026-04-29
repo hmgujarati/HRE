@@ -14,6 +14,11 @@ import PricingChart from "@/pages/PricingChart";
 import PriceHistory from "@/pages/PriceHistory";
 import ComingSoon from "@/pages/ComingSoon";
 import Settings from "@/pages/Settings";
+import Contacts from "@/pages/Contacts";
+import ContactDetail from "@/pages/ContactDetail";
+import Quotations from "@/pages/Quotations";
+import QuotationBuilder from "@/pages/QuotationBuilder";
+import QuotationView from "@/pages/QuotationView";
 
 function App() {
   return (
@@ -25,6 +30,12 @@ function App() {
           <Route element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/quotations" element={<Quotations />} />
+            <Route path="/quotations/new" element={<QuotationBuilder />} />
+            <Route path="/quotations/:id" element={<QuotationView />} />
+            <Route path="/quotations/:id/edit" element={<QuotationBuilder />} />
+            <Route path="/contacts" element={<Contacts />} />
+            <Route path="/contacts/:id" element={<ContactDetail />} />
             <Route path="/pricing-chart" element={<PricingChart />} />
             <Route path="/products" element={<PricingChart />} />
             <Route path="/product-families" element={<ProductFamilies />} />

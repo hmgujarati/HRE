@@ -911,6 +911,384 @@ async def public_stats():
     return {"materials": materials, "families": families, "variants": variants}
 
 
+# ---------- Contacts (CRM) ----------
+class ContactIn(BaseModel):
+    name: str
+    company: Optional[str] = ""
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+    gst_number: Optional[str] = ""
+    billing_address: Optional[str] = ""
+    shipping_address: Optional[str] = ""
+    state: Optional[str] = ""
+    country: Optional[str] = "India"
+    source: Optional[str] = "manual"  # manual / expo / quotation / whatsapp
+    tags: List[str] = Field(default_factory=list)
+    notes: Optional[str] = ""
+
+
+def _norm_phone(s: Optional[str]) -> str:
+    if not s:
+        return ""
+    return "".join(ch for ch in s if ch.isdigit())[-10:]
+
+
+def _norm_email(s: Optional[str]) -> str:
+    return (s or "").strip().lower()
+
+
+async def _find_contact_match(phone: str, email: str) -> Optional[dict]:
+    p = _norm_phone(phone)
+    e = _norm_email(email)
+    if e:
+        c = await db.contacts.find_one({"email_norm": e}, {"_id": 0})
+        if c:
+            return c
+    if p:
+        c = await db.contacts.find_one({"phone_norm": p}, {"_id": 0})
+        if c:
+            return c
+    return None
+
+
+@api.get("/contacts")
+async def list_contacts(q: Optional[str] = None, source: Optional[str] = None, _: dict = Depends(get_current_user)):
+    query: Dict[str, Any] = {}
+    if source:
+        query["source"] = source
+    if q:
+        query["$or"] = [
+            {"name": {"$regex": q, "$options": "i"}},
+            {"company": {"$regex": q, "$options": "i"}},
+            {"phone": {"$regex": q, "$options": "i"}},
+            {"email": {"$regex": q, "$options": "i"}},
+        ]
+    items = await db.contacts.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    return items
+
+
+@api.get("/contacts/{cid}")
+async def get_contact(cid: str, _: dict = Depends(get_current_user)):
+    item = await db.contacts.find_one({"id": cid}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return item
+
+
+@api.post("/contacts")
+async def create_contact(data: ContactIn, user: dict = Depends(require_role("admin", "manager"))):
+    doc = data.model_dump()
+    doc["phone_norm"] = _norm_phone(doc.get("phone"))
+    doc["email_norm"] = _norm_email(doc.get("email"))
+    # Smart upsert: if phone or email already present, update existing
+    existing = await _find_contact_match(doc.get("phone", ""), doc.get("email", ""))
+    if existing:
+        upd = {k: v for k, v in doc.items() if v not in (None, "", []) or k in {"tags"}}
+        upd["updated_at"] = now_iso()
+        await db.contacts.update_one({"id": existing["id"]}, {"$set": upd})
+        item = await db.contacts.find_one({"id": existing["id"]}, {"_id": 0})
+        return item
+    doc["id"] = str(uuid.uuid4())
+    doc["created_at"] = now_iso()
+    doc["updated_at"] = now_iso()
+    doc["created_by"] = user["email"]
+    await db.contacts.insert_one(doc.copy())
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/contacts/{cid}")
+async def update_contact(cid: str, data: ContactIn, user: dict = Depends(require_role("admin", "manager"))):
+    upd = data.model_dump()
+    upd["phone_norm"] = _norm_phone(upd.get("phone"))
+    upd["email_norm"] = _norm_email(upd.get("email"))
+    upd["updated_at"] = now_iso()
+    res = await db.contacts.update_one({"id": cid}, {"$set": upd})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    item = await db.contacts.find_one({"id": cid}, {"_id": 0})
+    return item
+
+
+@api.delete("/contacts/{cid}")
+async def delete_contact(cid: str, _: dict = Depends(require_role("admin"))):
+    res = await db.contacts.delete_one({"id": cid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return {"ok": True}
+
+
+@api.get("/contacts/{cid}/quotations")
+async def contact_quotations(cid: str, _: dict = Depends(get_current_user)):
+    items = await db.quotations.find({"contact_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return items
+
+
+# ---------- Quotations ----------
+class QuoteLineIn(BaseModel):
+    product_variant_id: Optional[str] = None
+    product_code: str
+    family_name: Optional[str] = ""
+    description: Optional[str] = ""
+    cable_size: Optional[str] = ""
+    hole_size: Optional[str] = ""
+    dimensions: Dict[str, Any] = Field(default_factory=dict)
+    hsn_code: Optional[str] = "85369090"
+    quantity: float = 1
+    unit: Optional[str] = "NOS"
+    base_price: float = 0.0
+    discount_percentage: float = 0.0
+    gst_percentage: float = 18.0
+
+
+class QuoteIn(BaseModel):
+    contact_id: str
+    place_of_supply: Optional[str] = ""
+    valid_until: Optional[str] = None  # ISO date
+    notes: Optional[str] = ""
+    terms: Optional[str] = ""
+    line_items: List[QuoteLineIn] = Field(default_factory=list)
+
+
+def _fy_label(d: datetime) -> str:
+    """Indian FY: April → March. e.g. Apr 2026 → '2026-27'."""
+    if d.month >= 4:
+        return f"{d.year}-{str(d.year + 1)[-2:]}"
+    return f"{d.year - 1}-{str(d.year)[-2:]}"
+
+
+async def _next_quote_number() -> str:
+    fy = _fy_label(datetime.now(timezone.utc))
+    counter = await db.counters.find_one_and_update(
+        {"_id": f"quote_seq_{fy}"},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True,
+    )
+    seq = counter["seq"] if counter else 1
+    return f"HRE/QT/{fy}/{seq:04d}"
+
+
+def _compute_quote_totals(line_items: List[Dict[str, Any]]) -> Dict[str, float]:
+    subtotal = 0.0
+    total_discount = 0.0
+    total_gst = 0.0
+    for li in line_items:
+        qty = float(li.get("quantity") or 0)
+        base = float(li.get("base_price") or 0)
+        disc_pct = float(li.get("discount_percentage") or 0)
+        gst_pct = float(li.get("gst_percentage") or 0)
+        line_gross = qty * base
+        line_disc = round(line_gross * disc_pct / 100.0, 2)
+        line_taxable = round(line_gross - line_disc, 2)
+        line_gst = round(line_taxable * gst_pct / 100.0, 2)
+        line_total = round(line_taxable + line_gst, 2)
+        li["line_gross"] = round(line_gross, 2)
+        li["discount_amount"] = line_disc
+        li["taxable_value"] = line_taxable
+        li["gst_amount"] = line_gst
+        li["line_total"] = line_total
+        subtotal += line_gross
+        total_discount += line_disc
+        total_gst += line_gst
+    grand_total = round(subtotal - total_discount + total_gst, 2)
+    return {
+        "subtotal": round(subtotal, 2),
+        "total_discount": round(total_discount, 2),
+        "taxable_value": round(subtotal - total_discount, 2),
+        "total_gst": round(total_gst, 2),
+        "grand_total": grand_total,
+    }
+
+
+@api.get("/quotations")
+async def list_quotations(
+    status_filter: Optional[str] = None,
+    contact_id: Optional[str] = None,
+    q: Optional[str] = None,
+    _: dict = Depends(get_current_user),
+):
+    query: Dict[str, Any] = {}
+    if status_filter:
+        query["status"] = status_filter
+    if contact_id:
+        query["contact_id"] = contact_id
+    if q:
+        query["$or"] = [
+            {"quote_number": {"$regex": q, "$options": "i"}},
+            {"contact_name": {"$regex": q, "$options": "i"}},
+            {"contact_company": {"$regex": q, "$options": "i"}},
+        ]
+    items = await db.quotations.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    return items
+
+
+@api.get("/quotations/next-number")
+async def quote_next_number(_: dict = Depends(get_current_user)):
+    fy = _fy_label(datetime.now(timezone.utc))
+    counter = await db.counters.find_one({"_id": f"quote_seq_{fy}"}, {"_id": 0})
+    nxt = (counter.get("seq", 0) + 1) if counter else 1
+    return {"preview": f"HRE/QT/{fy}/{nxt:04d}"}
+
+
+@api.get("/quotations/{qid}")
+async def get_quotation(qid: str, _: dict = Depends(get_current_user)):
+    item = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    return item
+
+
+@api.post("/quotations")
+async def create_quotation(data: QuoteIn, user: dict = Depends(require_role("admin", "manager"))):
+    contact = await db.contacts.find_one({"id": data.contact_id}, {"_id": 0})
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    line_items = [li.model_dump() for li in data.line_items]
+    totals = _compute_quote_totals(line_items)
+    qnum = await _next_quote_number()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "quote_number": qnum,
+        "version": 1,
+        "parent_quote_id": None,
+        "status": "draft",
+        "contact_id": contact["id"],
+        "contact_name": contact.get("name", ""),
+        "contact_company": contact.get("company", ""),
+        "contact_email": contact.get("email", ""),
+        "contact_phone": contact.get("phone", ""),
+        "contact_gst": contact.get("gst_number", ""),
+        "billing_address": contact.get("billing_address", ""),
+        "shipping_address": contact.get("shipping_address", ""),
+        "place_of_supply": data.place_of_supply or contact.get("state", ""),
+        "currency": "INR",
+        "valid_until": data.valid_until,
+        "notes": data.notes or "",
+        "terms": data.terms or "",
+        "line_items": line_items,
+        **totals,
+        "created_by": user["email"],
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "sent_at": None,
+        "approved_at": None,
+        "rejected_at": None,
+    }
+    await db.quotations.insert_one(doc.copy())
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/quotations/{qid}")
+async def update_quotation(qid: str, data: QuoteIn, user: dict = Depends(require_role("admin", "manager"))):
+    existing = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if existing.get("status") in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail=f"Cannot edit {existing['status']} quote — use Revise instead")
+    contact = await db.contacts.find_one({"id": data.contact_id}, {"_id": 0})
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    line_items = [li.model_dump() for li in data.line_items]
+    totals = _compute_quote_totals(line_items)
+    upd = {
+        "contact_id": contact["id"],
+        "contact_name": contact.get("name", ""),
+        "contact_company": contact.get("company", ""),
+        "contact_email": contact.get("email", ""),
+        "contact_phone": contact.get("phone", ""),
+        "contact_gst": contact.get("gst_number", ""),
+        "billing_address": contact.get("billing_address", ""),
+        "shipping_address": contact.get("shipping_address", ""),
+        "place_of_supply": data.place_of_supply or contact.get("state", ""),
+        "valid_until": data.valid_until,
+        "notes": data.notes or "",
+        "terms": data.terms or "",
+        "line_items": line_items,
+        **totals,
+        "updated_at": now_iso(),
+    }
+    await db.quotations.update_one({"id": qid}, {"$set": upd})
+    item = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    return item
+
+
+@api.patch("/quotations/{qid}/status")
+async def change_quote_status(qid: str, payload: dict, user: dict = Depends(require_role("admin", "manager"))):
+    new_status = payload.get("status")
+    if new_status not in ("draft", "sent", "approved", "rejected", "expired"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    existing = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    upd: Dict[str, Any] = {"status": new_status, "updated_at": now_iso()}
+    if new_status == "sent":
+        upd["sent_at"] = now_iso()
+    elif new_status == "approved":
+        upd["approved_at"] = now_iso()
+    elif new_status == "rejected":
+        upd["rejected_at"] = now_iso()
+    await db.quotations.update_one({"id": qid}, {"$set": upd})
+    item = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    return item
+
+
+@api.post("/quotations/{qid}/revise")
+async def revise_quotation(qid: str, user: dict = Depends(require_role("admin", "manager"))):
+    """Mark current as revised, clone it as a new draft v(N+1)."""
+    src = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    if not src:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    new_doc = {**src}
+    new_doc["id"] = str(uuid.uuid4())
+    new_doc["version"] = (src.get("version") or 1) + 1
+    new_doc["parent_quote_id"] = src["id"]
+    new_doc["quote_number"] = f"{src['quote_number']}-R{new_doc['version']}"
+    new_doc["status"] = "draft"
+    new_doc["created_by"] = user["email"]
+    new_doc["created_at"] = now_iso()
+    new_doc["updated_at"] = now_iso()
+    new_doc["sent_at"] = None
+    new_doc["approved_at"] = None
+    new_doc["rejected_at"] = None
+    await db.quotations.insert_one(new_doc.copy())
+    # Mark source as revised
+    await db.quotations.update_one({"id": src["id"]}, {"$set": {"status": "revised", "updated_at": now_iso()}})
+    new_doc.pop("_id", None)
+    return new_doc
+
+
+@api.delete("/quotations/{qid}")
+async def delete_quotation(qid: str, _: dict = Depends(require_role("admin"))):
+    res = await db.quotations.delete_one({"id": qid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    return {"ok": True}
+
+
+@api.get("/dashboard/quote-stats")
+async def quote_stats(_: dict = Depends(get_current_user)):
+    statuses = ["draft", "sent", "approved", "rejected", "revised", "expired"]
+    counts = {}
+    for s in statuses:
+        counts[s] = await db.quotations.count_documents({"status": s})
+    pipeline_total = await db.quotations.aggregate([
+        {"$match": {"status": {"$in": ["draft", "sent"]}}},
+        {"$group": {"_id": None, "value": {"$sum": "$grand_total"}}},
+    ]).to_list(1)
+    won_total = await db.quotations.aggregate([
+        {"$match": {"status": "approved"}},
+        {"$group": {"_id": None, "value": {"$sum": "$grand_total"}}},
+    ]).to_list(1)
+    return {
+        "counts": counts,
+        "pipeline_value": (pipeline_total[0]["value"] if pipeline_total else 0),
+        "won_value": (won_total[0]["value"] if won_total else 0),
+        "total_contacts": await db.contacts.count_documents({}),
+    }
+
+
 # ---------- Mount ----------
 app.include_router(api)
 app.mount("/api/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")

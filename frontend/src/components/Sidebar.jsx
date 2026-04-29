@@ -1,12 +1,14 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   ChartBar, Tag, Stack, Wrench, Folders, Package, ClockCounterClockwise,
-  ChatCircleDots, Storefront, GearSix, SignOut, FileText
+  ChatCircleDots, Storefront, GearSix, SignOut, FileText, AddressBook
 } from "@phosphor-icons/react";
 import { useAuth } from "@/contexts/AuthContext";
 
 const items = [
   { to: "/dashboard", label: "Dashboard", icon: ChartBar },
+  { to: "/quotations", label: "Quotations", icon: FileText },
+  { to: "/contacts", label: "Contacts", icon: AddressBook },
   { to: "/pricing-chart", label: "Pricing Chart", icon: Tag },
   { to: "/product-families", label: "Product Families", icon: Stack },
   { to: "/materials", label: "Materials", icon: Wrench },
@@ -16,8 +18,8 @@ const items = [
 ];
 
 const soon = [
-  { label: "Quotations", icon: FileText },
   { label: "WhatsApp Bot", icon: ChatCircleDots },
+  { label: "Order Tracking", icon: Storefront },
   { label: "Expo Leads", icon: Storefront },
 ];
 
@@ -34,7 +36,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-4">
-        <div className="px-6 mb-3 text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold">Catalogue</div>
+        <div className="px-6 mb-3 text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold">CRM</div>
         {items.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}

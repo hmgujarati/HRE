@@ -1,0 +1,103 @@
+{
+  "summary": "Phase 2A backend testing — Contacts (CRM) + Quotations modules. 34/34 new tests passed (covers 21 spec items + role enforcement + cleanup). All endpoints behave correctly: contact CRUD + smart upsert by email/phone (last-10-digit normalisation), search by q (name/company/phone/email), source filter, contact→quotations history, quote auto-numbering (HRE/QT/{FY}/{NNNN}, FY=Apr–Mar, increments per FY via MongoDB counters), per-line + total computation (subtotal/discount/taxable/GST/grand_total), draft update recalculation, 400 on update of approved/rejected, status timestamps (sent_at/approved_at/rejected_at), revise creates v2 draft with parent_quote_id and -R2 suffix and marks source as 'revised', admin-only delete for both, dashboard quote-stats with counts/pipeline/won/total_contacts. No regressions to Phase 1.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST/PUT /api/contacts",
+        "issue": "Stored `phone` is the raw string (with spaces/dashes/country code), only `phone_norm` is digits-only. List search `q` uses regex on raw `phone`, so searching by digits-only e.g. '9999988888' fails to match a stored '+91 99999-88888'. Suggest searching against `phone_norm` too (or normalise q before regex)."
+      },
+      {
+        "endpoint": "POST /api/contacts (smart upsert)",
+        "issue": "Upsert filter `if v not in (None, '', [])` skips false-y fields, but it OVERWRITES every non-empty field of the matched contact. There's no real 'merge': passing `company='X'` blows away an existing 'AcmeCorp'. Tags also fully replace (no append/dedup). Consider a true merge for tags and only-update-when-blank for primary fields, or accept current behaviour and document it. Currently behaves as last-write-wins."
+      },
+      {
+        "endpoint": "POST /api/contacts (smart upsert)",
+        "issue": "When the upsert hits an existing contact the response omits `created_by` and other audit fields aren't bumped (only `updated_at` is). The newly returned contact is the merged record but no `updated_by` is written. Minor — add `updated_by` for traceability."
+      },
+      {
+        "endpoint": "ContactIn schema",
+        "issue": "No validation on `source` (free-form string). Spec lists manual/expo/quotation/whatsapp; consider a Literal/Enum to avoid typos polluting filter dropdowns."
+      },
+      {
+        "endpoint": "ContactIn schema",
+        "issue": "`email` is `Optional[str]`, no EmailStr / format validation. Invalid strings (e.g. 'abc') are accepted and stored."
+      },
+      {
+        "endpoint": "POST /api/quotations",
+        "issue": "Race condition risk: `_next_quote_number()` increments the FY counter BEFORE the insert. If insert fails after increment, the quote number is silently consumed (gap in sequence). Acceptable for now but worth noting."
+      },
+      {
+        "endpoint": "POST /api/quotations/{id}/revise",
+        "issue": "Revision quote_number is built as `f\"{src.quote_number}-R{version}\"`. If the src already ended in `-R2`, revising again produces `…-R2-R3` (chained suffixes) instead of replacing. Consider stripping any existing `-R\\d+` before appending. Also revision does NOT consume a new HRE/QT counter — fine as designed but worth confirming with PM."
+      },
+      {
+        "endpoint": "POST /api/quotations/{id}/revise",
+        "issue": "No guard against revising an already-revised parent. Calling /revise on a quote that is already 'revised' will create yet another revision and silently overwrite the parent's status (still 'revised'). Consider 400 if status == 'revised' or if a child revision already exists."
+      },
+      {
+        "endpoint": "PATCH /api/quotations/{id}/status",
+        "issue": "`status` payload accepted as a free `dict` (no Pydantic model). Should be a typed schema. Also no transition validation — admin/manager can move from approved → draft directly."
+      },
+      {
+        "endpoint": "PATCH /api/quotations/{id}/status",
+        "issue": "'revised' is excluded from allowed transitions in the PATCH (only set internally by /revise) — good. But 'expired' has no automation/cron; only manually settable."
+      },
+      {
+        "endpoint": "POST /api/quotations",
+        "issue": "Computation uses `float` for INR currency math (same Phase 1 concern). For 100×100×0% the sums are exact, but discount/GST percentages with paise can introduce rounding drift. Consider Decimal."
+      },
+      {
+        "endpoint": "GET /api/contacts/{cid}/quotations",
+        "issue": "No pagination (capped at 500). Same for /api/contacts and /api/quotations (2000). For large tenants this becomes a hard ceiling without skip/limit/cursor params."
+      },
+      {
+        "endpoint": "GET /api/quotations + list_contacts",
+        "issue": "Search `q` is built directly into a regex without escaping. A user-supplied `(` or `\\` will throw a regex error from MongoDB. Wrap in `re.escape(q)` before injecting into `$regex`."
+      },
+      {
+        "endpoint": "DELETE /api/contacts/{cid}",
+        "issue": "No referential integrity: deleting a contact leaves the contact_id stale on existing quotations (snapshot fields stay, which is OK, but contact_quotations history endpoint will still find them via contact_id, and PUT /api/quotations/{id} with that contact_id will 404 because contact lookup fails). Consider soft-delete or block when active quotes exist."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_phase2a_crm_quotations.py",
+    "/app/test_reports/pytest/phase2a_results.xml"
+  ],
+  "action_items": [
+    "Consider escaping user input in `q` before injecting into MongoDB `$regex` in list_contacts and list_quotations (DoS / invalid-regex safety).",
+    "Document or refine smart-upsert semantics for contacts (currently last-write-wins on every non-empty field; tags fully replace).",
+    "Add Pydantic schema for PATCH /api/quotations/{id}/status payload, with optional transition validation.",
+    "Strip existing `-R\\d+` suffix before appending new revision suffix; guard against revising an already-revised quote.",
+    "Add `email: EmailStr` (or regex) and `source: Literal[...]` to ContactIn for input validation.",
+    "Make contact list `q` also match `phone_norm` so digit-only searches work regardless of formatting in stored phone.",
+    "Add pagination params (skip/limit) to /api/contacts, /api/quotations, /api/contacts/{id}/quotations."
+  ],
+  "critical_code_review_comments": [
+    "MongoDB regex search on user-supplied `q` is not escaped — possible 500 errors / minor DoS. Use re.escape().",
+    "Contact smart upsert is essentially last-write-wins (overwrites company/source/tags), not a true 'merge'. Document or refine.",
+    "Quote number sequence is consumed before insert; failed insert leaks a number and creates a gap.",
+    "Revise endpoint chains `-R{n}` suffixes if called on an already-revised number.",
+    "PATCH /quotations/status takes raw dict, no schema, no transition validation (e.g., approved→draft allowed).",
+    "Float arithmetic for INR currency (Phase 1 finding still applies to quote totals).",
+    "No pagination cap is configurable (500/2000 hard limits).",
+    "ContactIn lacks EmailStr/Enum validation.",
+    "DELETE contact does not check for referencing quotations (orphaning risk on edits)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2a_crm_quotations.py"
+  ],
+  "success_rate": {
+    "backend": "100% (34/34 Phase 2A tests passing)",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "admin@hrexporter.com / Admin@123 (admin, seeded). test_employee@hrexporter.com / EmpPass@123 (employee, created by tests directly in MongoDB — note lowercase email; server lowercases on login).",
+  "seed_data_creation": "Tests create one TEST_ contact (id stored in STATE), 2 quotations + 1 revision, then DELETE all of them in TestZCleanup. They do NOT mutate Phase 1 seeded products. The TEST_employee user is upserted into mongo for role checks. Counter `quote_seq_{FY}` in db.counters is incremented twice per full run (no rollback) — quote numbers will progress monotonically across runs (expected behaviour).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run with: pytest /app/backend/tests/test_phase2a_crm_quotations.py -v. Phase 1 tests still in /app/backend/tests/test_hre_crm_backend.py (28/30 passing; 2 fail until the price-history bug from iteration_1 is fixed). The Phase 2A test creates the TEST_employee user with EMAIL IN LOWERCASE because /api/auth/login does payload.email.lower() before lookup — uppercase-stored emails will fail to authenticate (this caused initial skips). Counter doc id is `quote_seq_{FY}` (FY=2025-26 in Jan 2026, becomes 2026-27 from April 2026). Quote-number sequence is shared with any prior runs; the tests assert relative increment, not absolute values.",
+  "rca of the issue": "No blocking bugs were found in Phase 2A. The 2 initial test failures during run #1 were test-data ordering issues caused by upsert_by_phone overwriting company/source on the same contact; tests were adjusted to match post-upsert state. The role-test skip was a credential issue: server.py's /api/auth/login lowercases the incoming email before the DB lookup, while the test seeded the user with uppercase 'TEST_employee'. Fixed by inserting the user with lowercase email."
+}
