@@ -1296,6 +1296,345 @@ async def quote_stats(_: dict = Depends(get_current_user)):
     }
 
 
+# ---------- Public Catalogue + Self-Serve Quote (Wave A) ----------
+import secrets
+import hashlib
+
+OTP_TTL_SECONDS = 10 * 60
+OTP_MAX_ATTEMPTS = 5
+SESSION_TTL_DAYS = 30
+DEV_OTP_PASSTHROUGH = os.environ.get("DEV_OTP_PASSTHROUGH", "true").lower() == "true"
+
+
+def _hash_otp(code: str) -> str:
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+def _now_dt() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _strip_pricing_fields(obj: dict) -> dict:
+    out = dict(obj)
+    for f in ("base_price", "discount_percentage", "final_price", "manual_price", "manual_price_override"):
+        out.pop(f, None)
+    return out
+
+
+@api.get("/public/catalogue")
+async def public_catalogue():
+    fams = await db.product_families.find({"active": True}, {"_id": 0}).sort("family_name", 1).to_list(500)
+    mats = await db.materials.find({"active": True}, {"_id": 0}).to_list(50)
+    cats = await db.categories.find({"active": True}, {"_id": 0}).to_list(500)
+    return {"families": fams, "materials": mats, "categories": cats}
+
+
+@api.get("/public/family/{fid}")
+async def public_family(fid: str):
+    fam = await db.product_families.find_one({"id": fid, "active": True}, {"_id": 0})
+    if not fam:
+        raise HTTPException(status_code=404, detail="Family not found")
+    variants = await db.product_variants.find({"product_family_id": fid, "active": True}, {"_id": 0}).to_list(2000)
+    return {"family": fam, "variants": [_strip_pricing_fields(v) for v in variants]}
+
+
+class QuoteRequestStart(BaseModel):
+    name: str
+    company: Optional[str] = ""
+    phone: str
+    email: Optional[str] = ""
+    gst_number: Optional[str] = ""
+    state: Optional[str] = ""
+    billing_address: Optional[str] = ""
+    shipping_address: Optional[str] = ""
+
+
+@api.post("/public/quote-requests/start")
+async def public_qr_start(data: QuoteRequestStart):
+    if not data.phone or len(_norm_phone(data.phone)) < 10:
+        raise HTTPException(status_code=400, detail="Valid 10-digit phone number required")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": data.name.strip(),
+        "company": (data.company or "").strip(),
+        "phone": data.phone.strip(),
+        "phone_norm": _norm_phone(data.phone),
+        "email": _norm_email(data.email),
+        "gst_number": data.gst_number or "",
+        "state": data.state or "",
+        "billing_address": data.billing_address or "",
+        "shipping_address": data.shipping_address or "",
+        "verified": False,
+        "session_token": None,
+        "session_expires_at": None,
+        "otp_hash": None,
+        "otp_expires_at": None,
+        "otp_attempts": 0,
+        "created_at": now_iso(),
+    }
+    await db.quote_requests.insert_one(doc.copy())
+    return {"request_id": doc["id"]}
+
+
+@api.post("/public/quote-requests/{rid}/send-otp")
+async def public_qr_send_otp(rid: str):
+    qr = await db.quote_requests.find_one({"id": rid}, {"_id": 0})
+    if not qr:
+        raise HTTPException(status_code=404, detail="Request not found")
+    code = f"{secrets.randbelow(900000) + 100000}"
+    expires = _now_dt() + timedelta(seconds=OTP_TTL_SECONDS)
+    await db.quote_requests.update_one(
+        {"id": rid},
+        {"$set": {
+            "otp_hash": _hash_otp(code),
+            "otp_expires_at": expires.isoformat(),
+            "otp_attempts": 0,
+        }},
+    )
+    # Wave A: log only. Wave B: replace with WhatsApp template send.
+    logger.info(f"[OTP] phone={qr['phone']} code={code} (request_id={rid})")
+    resp = {"ok": True, "expires_in": OTP_TTL_SECONDS}
+    if DEV_OTP_PASSTHROUGH:
+        resp["dev_otp"] = code
+    return resp
+
+
+class OtpVerify(BaseModel):
+    code: str
+
+
+@api.post("/public/quote-requests/{rid}/verify-otp")
+async def public_qr_verify_otp(rid: str, data: OtpVerify):
+    qr = await db.quote_requests.find_one({"id": rid}, {"_id": 0})
+    if not qr or not qr.get("otp_hash"):
+        raise HTTPException(status_code=404, detail="Request not found or no OTP issued")
+    if qr.get("otp_attempts", 0) >= OTP_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many failed attempts — request a new OTP")
+    if qr.get("otp_expires_at") and datetime.fromisoformat(qr["otp_expires_at"]) < _now_dt():
+        raise HTTPException(status_code=400, detail="OTP expired — request a new one")
+    if _hash_otp((data.code or "").strip()) != qr["otp_hash"]:
+        await db.quote_requests.update_one({"id": rid}, {"$inc": {"otp_attempts": 1}})
+        raise HTTPException(status_code=400, detail="Incorrect OTP")
+    token = secrets.token_urlsafe(32)
+    sess_exp = _now_dt() + timedelta(days=SESSION_TTL_DAYS)
+    await db.quote_requests.update_one(
+        {"id": rid},
+        {"$set": {
+            "verified": True,
+            "session_token": token,
+            "session_expires_at": sess_exp.isoformat(),
+            "otp_hash": None,
+            "verified_at": now_iso(),
+        }},
+    )
+    await db.public_sessions.insert_one({
+        "token": token,
+        "phone_norm": qr["phone_norm"],
+        "request_id": rid,
+        "expires_at": sess_exp.isoformat(),
+        "created_at": now_iso(),
+    })
+    return {"token": token, "expires_in_days": SESSION_TTL_DAYS}
+
+
+async def _resolve_public_session(token: Optional[str]) -> dict:
+    if not token:
+        raise HTTPException(status_code=401, detail="Verification token required")
+    sess = await db.public_sessions.find_one({"token": token}, {"_id": 0})
+    if not sess:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    if datetime.fromisoformat(sess["expires_at"]) < _now_dt():
+        raise HTTPException(status_code=401, detail="Session expired")
+    return sess
+
+
+@api.get("/public/variants")
+async def public_variants(token: str, q: Optional[str] = None):
+    """After OTP verification: list active variants WITH prices for the cart."""
+    await _resolve_public_session(token)
+    query: Dict[str, Any] = {"active": True}
+    if q:
+        rx = re.escape(q)
+        query["$or"] = [
+            {"product_code": {"$regex": rx, "$options": "i"}},
+            {"product_name": {"$regex": rx, "$options": "i"}},
+        ]
+    items = await db.product_variants.find(query, {"_id": 0}).sort("product_code", 1).to_list(5000)
+    return items
+
+
+class CartLine(BaseModel):
+    product_variant_id: str
+    quantity: float
+
+
+class FinalisePayload(BaseModel):
+    items: List[CartLine]
+    notes: Optional[str] = ""
+
+
+@api.post("/public/quote-requests/{rid}/finalise")
+async def public_qr_finalise(rid: str, payload: FinalisePayload, token: str):
+    sess = await _resolve_public_session(token)
+    if sess.get("request_id") != rid:
+        raise HTTPException(status_code=403, detail="Session does not match this request")
+    qr = await db.quote_requests.find_one({"id": rid}, {"_id": 0})
+    if not qr or not qr.get("verified"):
+        raise HTTPException(status_code=400, detail="Phone number not verified")
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+
+    existing = await _find_contact_match(qr.get("phone", ""), qr.get("email", ""))
+    if existing:
+        contact_id = existing["id"]
+        await db.contacts.update_one(
+            {"id": contact_id},
+            {"$set": {
+                "name": qr["name"] or existing.get("name"),
+                "company": qr.get("company") or existing.get("company"),
+                "email": qr.get("email") or existing.get("email"),
+                "email_norm": _norm_email(qr.get("email")),
+                "phone": qr.get("phone") or existing.get("phone"),
+                "phone_norm": qr["phone_norm"],
+                "gst_number": qr.get("gst_number") or existing.get("gst_number"),
+                "state": qr.get("state") or existing.get("state"),
+                "billing_address": qr.get("billing_address") or existing.get("billing_address"),
+                "shipping_address": qr.get("shipping_address") or existing.get("shipping_address"),
+                "source": "public",
+                "updated_at": now_iso(),
+            }},
+        )
+        contact = await db.contacts.find_one({"id": contact_id}, {"_id": 0})
+    else:
+        contact = {
+            "id": str(uuid.uuid4()),
+            "name": qr["name"], "company": qr.get("company", ""),
+            "phone": qr.get("phone", ""), "phone_norm": qr["phone_norm"],
+            "email": qr.get("email", ""), "email_norm": _norm_email(qr.get("email")),
+            "gst_number": qr.get("gst_number", ""),
+            "state": qr.get("state", ""),
+            "country": "India",
+            "billing_address": qr.get("billing_address", ""),
+            "shipping_address": qr.get("shipping_address", ""),
+            "source": "public",
+            "tags": [], "notes": "",
+            "created_by": "self-service",
+            "created_at": now_iso(), "updated_at": now_iso(),
+        }
+        await db.contacts.insert_one(contact.copy())
+        contact.pop("_id", None)
+
+    line_items: List[Dict[str, Any]] = []
+    for ci in payload.items:
+        v = await db.product_variants.find_one({"id": ci.product_variant_id, "active": True}, {"_id": 0})
+        if not v:
+            continue
+        fam = await db.product_families.find_one({"id": v["product_family_id"]}, {"_id": 0})
+        line_items.append({
+            "product_variant_id": v["id"],
+            "product_code": v["product_code"],
+            "family_name": (fam or {}).get("family_name", ""),
+            "description": "",
+            "cable_size": v.get("cable_size", ""),
+            "hole_size": v.get("hole_size", ""),
+            "dimensions": v.get("dimensions", {}),
+            "hsn_code": v.get("hsn_code", "85369090"),
+            "quantity": float(ci.quantity or 0),
+            "unit": v.get("unit", "NOS"),
+            "base_price": float(v.get("final_price") or v.get("base_price") or 0),
+            "discount_percentage": 0.0,
+            "gst_percentage": float(v.get("gst_percentage") or 18),
+        })
+    if not line_items:
+        raise HTTPException(status_code=400, detail="No valid variants in cart")
+
+    totals = _compute_quote_totals(line_items)
+    qnum = await _next_quote_number()
+    quote = {
+        "id": str(uuid.uuid4()),
+        "quote_number": qnum,
+        "version": 1,
+        "parent_quote_id": None,
+        "status": "sent",
+        "self_service": True,
+        "contact_id": contact["id"],
+        "contact_name": contact.get("name", ""),
+        "contact_company": contact.get("company", ""),
+        "contact_email": contact.get("email", ""),
+        "contact_phone": contact.get("phone", ""),
+        "contact_gst": contact.get("gst_number", ""),
+        "billing_address": contact.get("billing_address", ""),
+        "shipping_address": contact.get("shipping_address", ""),
+        "place_of_supply": contact.get("state", ""),
+        "currency": "INR",
+        "valid_until": (_now_dt() + timedelta(days=30)).date().isoformat(),
+        "notes": payload.notes or "",
+        "terms": "Prices are exclusive of freight unless specified.\nValidity: 30 days.\nPayment: 50% advance, 50% before dispatch.",
+        "line_items": line_items,
+        **totals,
+        "created_by": f"self-service ({contact.get('phone', '')})",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "sent_at": now_iso(),
+        "approved_at": None, "rejected_at": None,
+    }
+    await db.quotations.insert_one(quote.copy())
+    # TODO Wave B: dispatch Hostinger SMTP email + WhatsApp here.
+    logger.info(f"[Self-Service Quote] {qnum} created for {contact.get('phone')}")
+    return {"id": quote["id"], "quote_number": qnum, "grand_total": quote["grand_total"]}
+
+
+@api.get("/public/my-quotes")
+async def public_my_quotes(token: str):
+    sess = await _resolve_public_session(token)
+    contacts = await db.contacts.find({"phone_norm": sess["phone_norm"]}, {"_id": 0}).to_list(50)
+    cids = [c["id"] for c in contacts]
+    if not cids:
+        return []
+    items = await db.quotations.find({"contact_id": {"$in": cids}}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return items
+
+
+@api.get("/public/quote/{qid}")
+async def public_quote_view(qid: str, token: str):
+    sess = await _resolve_public_session(token)
+    quote = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    contact = await db.contacts.find_one({"id": quote["contact_id"]}, {"_id": 0})
+    if not contact or contact.get("phone_norm") != sess["phone_norm"]:
+        raise HTTPException(status_code=403, detail="This quote does not belong to your phone")
+    return quote
+
+
+class PhoneOnlyOtp(BaseModel):
+    phone: str
+
+
+@api.post("/public/my-quotes/login/start")
+async def public_login_start(data: PhoneOnlyOtp):
+    pn = _norm_phone(data.phone)
+    if len(pn) < 10:
+        raise HTTPException(status_code=400, detail="Valid 10-digit phone number required")
+    rid = str(uuid.uuid4())
+    code = f"{secrets.randbelow(900000) + 100000}"
+    expires = _now_dt() + timedelta(seconds=OTP_TTL_SECONDS)
+    await db.quote_requests.insert_one({
+        "id": rid,
+        "name": "", "company": "", "phone": data.phone, "phone_norm": pn,
+        "email": "", "gst_number": "", "state": "",
+        "billing_address": "", "shipping_address": "",
+        "verified": False, "session_token": None, "session_expires_at": None,
+        "otp_hash": _hash_otp(code), "otp_expires_at": expires.isoformat(),
+        "otp_attempts": 0, "created_at": now_iso(), "kind": "login",
+    })
+    logger.info(f"[OTP-LOGIN] phone={data.phone} code={code} (request_id={rid})")
+    resp = {"request_id": rid, "expires_in": OTP_TTL_SECONDS}
+    if DEV_OTP_PASSTHROUGH:
+        resp["dev_otp"] = code
+    return resp
+
+
 # ---------- Mount ----------
 app.include_router(api)
 app.mount("/api/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")

@@ -4,6 +4,7 @@ import { Toaster } from "sonner";
 import { AuthProvider } from "@/contexts/AuthContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import DashboardLayout from "@/components/DashboardLayout";
+import PublicLayout from "@/components/PublicLayout";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import Materials from "@/pages/Materials";
@@ -19,6 +20,10 @@ import ContactDetail from "@/pages/ContactDetail";
 import Quotations from "@/pages/Quotations";
 import QuotationBuilder from "@/pages/QuotationBuilder";
 import QuotationView from "@/pages/QuotationView";
+import PublicCatalogue from "@/pages/public/PublicCatalogue";
+import PublicFamilyDetail from "@/pages/public/PublicFamilyDetail";
+import RequestQuote from "@/pages/public/RequestQuote";
+import MyQuotes from "@/pages/public/MyQuotes";
 
 function App() {
   return (
@@ -27,8 +32,16 @@ function App() {
         <Toaster position="top-right" richColors />
         <Routes>
           <Route path="/login" element={<Login />} />
+          {/* Public catalogue (no auth) */}
+          <Route element={<PublicLayout />}>
+            <Route path="/" element={<Navigate to="/catalogue" replace />} />
+            <Route path="/catalogue" element={<PublicCatalogue />} />
+            <Route path="/catalogue/:id" element={<PublicFamilyDetail />} />
+            <Route path="/request-quote" element={<RequestQuote />} />
+            <Route path="/my-quotes" element={<MyQuotes />} />
+          </Route>
+          {/* Admin app (auth required) */}
           <Route element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/quotations" element={<Quotations />} />
             <Route path="/quotations/new" element={<QuotationBuilder />} />
