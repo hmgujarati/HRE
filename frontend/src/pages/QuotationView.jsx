@@ -309,9 +309,9 @@ export default function QuotationView() {
             RUPEES : {grandWords}
           </div>
 
-          {/* BANK DETAILS */}
+          {/* BANK DETAILS + REMARK */}
           <div className="border-t border-black grid grid-cols-12 text-[11px]">
-            <div className="col-span-12 px-4 py-2">
+            <div className="col-span-7 border-r border-black px-4 py-2">
               <div className="font-bold underline mb-1">Bank Details :</div>
               <div className="grid grid-cols-2 gap-y-0.5">
                 <div><span className="font-bold">Bank Name :</span> {SELLER.bank.name}</div>
@@ -320,19 +320,17 @@ export default function QuotationView() {
                 <div><span className="font-bold">Branch :</span> {SELLER.bank.branch}</div>
               </div>
             </div>
+            <div className="col-span-5 px-4 py-2 min-h-[80px]">
+              <div className="font-bold underline mb-1">Remark :</div>
+              <div className="whitespace-pre-line">{quote.notes || ""}</div>
+            </div>
           </div>
 
           {/* TERMS & SIGNATURE */}
           <div className="border-t border-black grid grid-cols-12 text-[11px]">
-            <div className="col-span-7 border-r border-black flex flex-col">
-              <div className="p-3 border-b border-black min-h-[80px]">
-                <div className="font-bold underline mb-1">Terms & Conditions :</div>
-                <div className="whitespace-pre-line">{quote.terms || ""}</div>
-              </div>
-              <div className="p-3 min-h-[60px]">
-                <div className="font-bold underline mb-1">Remark :</div>
-                <div className="whitespace-pre-line">{quote.notes || ""}</div>
-              </div>
+            <div className="col-span-7 border-r border-black p-3 min-h-[120px]">
+              <div className="font-bold underline mb-1">Terms & Conditions :</div>
+              <div className="whitespace-pre-line">{quote.terms || ""}</div>
             </div>
             <div className="col-span-5 p-3 flex flex-col items-end justify-between text-right">
               <div className="font-bold">E & O.E.</div>
