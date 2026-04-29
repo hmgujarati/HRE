@@ -5,6 +5,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 import os
+import re
 import uuid
 import shutil
 import logging
@@ -957,11 +958,13 @@ async def list_contacts(q: Optional[str] = None, source: Optional[str] = None, _
     if source:
         query["source"] = source
     if q:
+        rx = re.escape(q)
         query["$or"] = [
-            {"name": {"$regex": q, "$options": "i"}},
-            {"company": {"$regex": q, "$options": "i"}},
-            {"phone": {"$regex": q, "$options": "i"}},
-            {"email": {"$regex": q, "$options": "i"}},
+            {"name": {"$regex": rx, "$options": "i"}},
+            {"company": {"$regex": rx, "$options": "i"}},
+            {"phone": {"$regex": rx, "$options": "i"}},
+            {"phone_norm": {"$regex": _norm_phone(q) or rx}},
+            {"email": {"$regex": rx, "$options": "i"}},
         ]
     items = await db.contacts.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
     return items
@@ -1240,11 +1243,15 @@ async def revise_quotation(qid: str, user: dict = Depends(require_role("admin", 
     src = await db.quotations.find_one({"id": qid}, {"_id": 0})
     if not src:
         raise HTTPException(status_code=404, detail="Quotation not found")
+    if src.get("status") == "revised":
+        raise HTTPException(status_code=400, detail="This quote has already been revised — open the latest revision instead")
     new_doc = {**src}
     new_doc["id"] = str(uuid.uuid4())
     new_doc["version"] = (src.get("version") or 1) + 1
     new_doc["parent_quote_id"] = src["id"]
-    new_doc["quote_number"] = f"{src['quote_number']}-R{new_doc['version']}"
+    # Strip any prior -R\d+ suffix before appending current revision marker
+    base_number = re.sub(r"-R\d+$", "", src["quote_number"])
+    new_doc["quote_number"] = f"{base_number}-R{new_doc['version']}"
     new_doc["status"] = "draft"
     new_doc["created_by"] = user["email"]
     new_doc["created_at"] = now_iso()

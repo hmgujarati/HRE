@@ -15,6 +15,18 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - **Manager** — view + edit product/pricing data, image uploads, bulk discount
 - **Employee** — read-only on catalogue/pricing
 
+## Phase 2A — implemented (2026-04-29)
+- **Contacts (CRM)** module: full CRUD + smart upsert by phone/email (last-10-digit normalisation), regex-safe search, source filter (manual/expo/quotation/whatsapp), per-contact quote history, sidebar nav link
+- **Quotations** module:
+  - Auto-numbered `HRE/QT/{FY}/{NNNN}` (Indian fiscal year Apr–Mar, MongoDB-counter backed)
+  - Embedded line_items with per-line and aggregate computation (subtotal/discount/taxable/GST/grand_total)
+  - Statuses: draft → sent → approved/rejected/revised/expired with timestamps
+  - **Revise** endpoint clones into v2 draft, marks source as revised, strips prior `-R{n}` suffix (no chains)
+  - Quote builder UI with ContactPicker (with quick-add) + VariantSearchPicker + sticky totals + notes + terms
+  - Quote view with branded printable layout, Bill To / Ship To, signature lines, **Print → PDF** via browser
+  - Pipeline & Won value cards on quotations list + quote-stats endpoint
+- Sidebar reorganised: CRM section now (Dashboard, Quotations, Contacts, Pricing Chart, Product Families, Materials, Categories, Products/Variants, Price History). Coming soon: WhatsApp Bot, Order Tracking, Expo Leads.
+
 ## Phase 1 — implemented (2026-04-27)
 - JWT auth (login, /me, logout) with seeded admin `admin@hrexporter.com` / `Admin@123`
 - Materials CRUD (Copper + Aluminium seeded)
