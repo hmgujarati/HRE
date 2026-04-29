@@ -324,10 +324,12 @@ export default function QuotationView() {
 
           {/* TERMS & SIGNATURE */}
           <div className="border-t border-black grid grid-cols-12 text-[11px]">
-            <div className="col-span-7 border-r border-black p-3 min-h-[120px]">
-              <div className="font-bold underline mb-1">Terms & Conditions :</div>
-              <div className="whitespace-pre-line">{quote.terms || ""}</div>
-              <div className="mt-3">
+            <div className="col-span-7 border-r border-black flex flex-col">
+              <div className="p-3 border-b border-black min-h-[80px]">
+                <div className="font-bold underline mb-1">Terms & Conditions :</div>
+                <div className="whitespace-pre-line">{quote.terms || ""}</div>
+              </div>
+              <div className="p-3 min-h-[60px]">
                 <div className="font-bold underline mb-1">Remark :</div>
                 <div className="whitespace-pre-line">{quote.notes || ""}</div>
               </div>
