@@ -33,16 +33,16 @@ export default function PublicCatalogue() {
           backgroundImage: 'linear-gradient(#FBAE17 1px, transparent 1px), linear-gradient(90deg, #FBAE17 1px, transparent 1px)',
           backgroundSize: '32px 32px',
         }} />
-        <div className="max-w-7xl mx-auto px-6 py-16 relative z-10">
-          <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-4">Catalogue</div>
-          <h1 className="font-heading font-black text-5xl md:text-6xl tracking-tight max-w-3xl">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 sm:py-16 relative z-10">
+          <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-3 sm:mb-4">Catalogue</div>
+          <h1 className="font-heading font-black text-3xl sm:text-5xl md:text-6xl tracking-tight max-w-3xl leading-[1.05]">
             Industrial cable terminations,<br />
             <span className="bg-[#FBAE17] text-black px-2">precision engineered.</span>
           </h1>
-          <p className="text-zinc-300 mt-6 max-w-xl">
+          <p className="text-zinc-300 mt-4 sm:mt-6 max-w-xl text-sm sm:text-base">
             Browse our complete range of copper and aluminium lugs, ferrules, and connectors. Build a quote, verify your business via OTP, and receive pricing instantly.
           </p>
-          <div className="mt-8 flex flex-wrap gap-6 text-xs">
+          <div className="mt-6 sm:mt-8 flex flex-wrap gap-4 sm:gap-6 text-xs">
             <Stat label="Materials" value={data.materials.length} />
             <Stat label="Product Families" value={data.families.length} />
             <Stat label="Categories" value={data.categories.length} />
@@ -51,36 +51,36 @@ export default function PublicCatalogue() {
       </div>
 
       {/* Filters */}
-      <div className="border-b border-zinc-200 bg-white sticky top-[73px] z-20">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 min-w-[260px]">
+      <div className="border-b border-zinc-200 bg-white sticky top-[57px] sm:top-[73px] z-20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3">
+          <div className="relative flex-1 sm:min-w-[260px]">
             <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search families, ring lugs, pin terminals…"
-              className="w-full border border-zinc-300 pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-[#FBAE17]"
+              className="w-full border border-zinc-300 pl-9 pr-3 py-2.5 sm:py-2 text-sm focus:outline-none focus:border-[#FBAE17]"
               data-testid="public-catalogue-search"
             />
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0 pb-1 sm:pb-0 scrollbar-thin">
             <button
               onClick={() => setMatFilter("")}
-              className={`text-xs uppercase tracking-wider font-bold px-3 py-2 border transition-colors ${matFilter === "" ? 'bg-[#FBAE17] border-[#FBAE17] text-black' : 'border-zinc-300 hover:border-[#FBAE17]'}`}
+              className={`shrink-0 text-xs uppercase tracking-wider font-bold px-3 py-2 border transition-colors ${matFilter === "" ? 'bg-[#FBAE17] border-[#FBAE17] text-black' : 'border-zinc-300 hover:border-[#FBAE17]'}`}
               data-testid="public-mat-filter-all"
             >All</button>
             {data.materials.map((m) => (
               <button
                 key={m.id}
                 onClick={() => setMatFilter(m.id)}
-                className={`text-xs uppercase tracking-wider font-bold px-3 py-2 border transition-colors ${matFilter === m.id ? 'bg-[#FBAE17] border-[#FBAE17] text-black' : 'border-zinc-300 hover:border-[#FBAE17]'}`}
+                className={`shrink-0 text-xs uppercase tracking-wider font-bold px-3 py-2 border transition-colors ${matFilter === m.id ? 'bg-[#FBAE17] border-[#FBAE17] text-black' : 'border-zinc-300 hover:border-[#FBAE17]'}`}
                 data-testid={`public-mat-filter-${m.id}`}
               >{m.material_name}</button>
             ))}
           </div>
           <Link
             to="/request-quote"
-            className="ml-auto bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-4 py-2 flex items-center gap-2"
+            className="sm:ml-auto bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-4 py-2.5 sm:py-2 flex items-center justify-center gap-2"
             data-testid="public-build-quote-cta"
           >
             Build Quote <ArrowRight size={14} weight="bold" />
@@ -89,7 +89,7 @@ export default function PublicCatalogue() {
       </div>
 
       {/* Grid */}
-      <div className="max-w-7xl mx-auto px-6 py-8 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
         {filtered.map((f) => (
           <Link
             key={f.id}

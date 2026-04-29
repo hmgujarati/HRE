@@ -15,6 +15,16 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - **Manager** — view + edit product/pricing data, image uploads, bulk discount
 - **Employee** — read-only on catalogue/pricing
 
+## Public Portal Wave A — implemented (2026-05-XX, latest)
+- `/catalogue` public page (hero + materials filter chips + grid) — fully mobile responsive (chip row scrolls, hero scales, build-quote CTA stacks)
+- `/catalogue/:id` Family Detail with **Smart Variant Finder**:
+  - Cable size + Hole size inputs; numeric/range parser handles `"4-6 mm²"`, `"1.5"`, `"5 mm"` etc.
+  - Top-5 closest matches by numeric range distance (0 if user input falls inside a range)
+  - Hidden by default; "Show all" toggle reveals full table on demand (mobile = card list, desktop = table)
+- `/request-quote` cart + business details + mock OTP + priced review (mobile: card review, stacked subtotal); cart cards stack on mobile
+- `/my-quotes` past quotes via stored token
+- Backend `POST /api/public/quote-requests/start | /send-otp | /verify-otp | /finalise` — OTP currently DEV (returned in `dev_otp`); WhatsApp+SMTP wiring pending user keys
+
 ## Phase 2A — implemented (2026-04-29)
 - **Contacts (CRM)** module: full CRUD + smart upsert by phone/email (last-10-digit normalisation), regex-safe search, source filter (manual/expo/quotation/whatsapp), per-contact quote history, sidebar nav link
 - **Quotations** module:
