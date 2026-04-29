@@ -327,12 +327,10 @@ export default function QuotationView() {
             <div className="col-span-7 border-r border-black p-3 min-h-[120px]">
               <div className="font-bold underline mb-1">Terms & Conditions :</div>
               <div className="whitespace-pre-line">{quote.terms || ""}</div>
-              {quote.notes && (
-                <div className="mt-3">
-                  <div className="font-bold underline mb-1">Remark :</div>
-                  <div className="whitespace-pre-line">{quote.notes}</div>
-                </div>
-              )}
+              <div className="mt-3">
+                <div className="font-bold underline mb-1">Remark :</div>
+                <div className="whitespace-pre-line">{quote.notes || ""}</div>
+              </div>
             </div>
             <div className="col-span-5 p-3 flex flex-col items-end justify-between text-right">
               <div className="font-bold">E & O.E.</div>
