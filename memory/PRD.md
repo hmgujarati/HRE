@@ -15,6 +15,17 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - **Manager** — view + edit product/pricing data, image uploads, bulk discount
 - **Employee** — read-only on catalogue/pricing
 
+## Quote PDF Dispatch (WhatsApp + Email) — implemented (2026-04-30)
+- New module `/app/backend/quote_pdf.py`: server-side PDF generator using **Jinja2 + WeasyPrint**, replicates the on-screen `QuotationView.jsx` layout (header, GSTIN/PAN, TO box, line items, CGST/SGST/IGST split, Indian-format totals, RUPEES words, bank + remark, terms + signature)
+- New endpoints:
+  - `POST /api/quotations/{qid}/send` — admin/manager: render PDF + dispatch via WA template (`send-media-message` style with `header_document`) + email via SMTP
+  - `GET /api/quotations/{qid}/pdf` — admin: download/preview PDF
+  - `GET /api/settings/whatsapp/templates` — proxies BizChatAPI `template-list`, normalises shape
+- Settings `whatsapp.quote_template_name` + `quote_template_language` now stored; admin can pick from 34 approved templates loaded via "Load templates" button (auto-fills `template_name` dropdown + matching language dropdown)
+- `QuotationView.jsx` now has a **Send to Customer** button (green WhatsApp accent) that triggers dispatch and toasts the channel results (`WhatsApp ✓ + Email ✓` etc.)
+- `_dispatch_finalised_quote` is also called automatically when a customer finalises a public quote, so self-service quotes auto-arrive on WhatsApp + Email
+- Required env: `PUBLIC_BASE_URL` (added to backend/.env) — used as the `media_url` host for `header_document`
+
 ## WhatsApp + SMTP Settings Module — implemented (2026-04-30)
 - New collection `settings` (singleton doc `id: "integrations"`) holds WhatsApp (BizChatAPI) and SMTP (Hostinger) configuration
 - Endpoints (admin/manager): `GET /api/settings/integrations`, `PUT /api/settings/integrations`, `POST /api/settings/whatsapp/test`, `POST /api/settings/smtp/test`

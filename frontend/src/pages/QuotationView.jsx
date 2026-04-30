@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
-import { ArrowLeft, PencilSimple, Printer, ArrowsClockwise, Check, X, PaperPlaneTilt } from "@phosphor-icons/react";
+import { ArrowLeft, PencilSimple, Printer, ArrowsClockwise, Check, X, PaperPlaneTilt, WhatsappLogo } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import QuoteStatusBadge from "@/components/QuoteStatusBadge";
 import { numberToWordsINR } from "@/lib/numberToWords";
@@ -82,6 +82,31 @@ export default function QuotationView() {
     }
   };
 
+  const dispatch = async () => {
+    if (!window.confirm("Generate the PDF and send it to the customer via WhatsApp + Email?")) return;
+    try {
+      toast.loading("Dispatching…", { id: "dispatch" });
+      const r = await api.post(`/quotations/${id}/send`);
+      toast.dismiss("dispatch");
+      const d = r.data;
+      const msgs = [];
+      if (d.whatsapp) msgs.push("WhatsApp ✓");
+      if (d.email) msgs.push("Email ✓");
+      if (Object.keys(d.errors || {}).length) {
+        const errs = Object.entries(d.errors).map(([k, v]) => `${k}: ${v}`).join(" · ");
+        toast.error(`Sent: ${msgs.join(" + ") || "nothing"} — Errors: ${errs}`);
+      } else if (msgs.length) {
+        toast.success(`Quote dispatched (${msgs.join(" + ")})`);
+        load();
+      } else {
+        toast("PDF generated but no channel was configured to dispatch.", { icon: "ℹ️" });
+      }
+    } catch (e) {
+      toast.dismiss("dispatch");
+      toast.error(formatApiError(e?.response?.data?.detail));
+    }
+  };
+
   if (!quote) return <div className="p-8 text-zinc-400">Loading…</div>;
 
   const canEdit = !["approved", "rejected"].includes(quote.status);
@@ -111,6 +136,9 @@ export default function QuotationView() {
             </Link>
             <button onClick={() => window.print()} className="px-4 py-2 border border-zinc-300 text-xs font-bold uppercase tracking-wider hover:bg-zinc-50 flex items-center gap-2" data-testid="quote-print-btn">
               <Printer size={14} weight="bold" /> Print / PDF
+            </button>
+            <button onClick={dispatch} className="px-4 py-2 bg-[#25D366] hover:bg-[#1FB358] text-white text-xs font-bold uppercase tracking-wider flex items-center gap-2" data-testid="quote-dispatch-btn">
+              <WhatsappLogo size={14} weight="fill" /> Send to Customer
             </button>
             {canEdit && (
               <Link to={`/quotations/${id}/edit`} className="px-4 py-2 border border-zinc-300 text-xs font-bold uppercase tracking-wider hover:bg-zinc-50 flex items-center gap-2" data-testid="quote-edit-btn">

@@ -1274,6 +1274,32 @@ async def delete_quotation(qid: str, _: dict = Depends(require_role("admin"))):
     return {"ok": True}
 
 
+@api.post("/quotations/{qid}/send")
+async def send_quotation_dispatch(qid: str, _: dict = Depends(require_role("admin", "manager"))):
+    """Manually generate the PDF and dispatch to customer via WhatsApp + Email."""
+    quote = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    delivery = await _dispatch_finalised_quote(quote)
+    if delivery.get("whatsapp") or delivery.get("email"):
+        await db.quotations.update_one(
+            {"id": qid},
+            {"$set": {"sent_at": now_iso(), "status": "sent" if quote.get("status") == "draft" else quote.get("status")}},
+        )
+    return delivery
+
+
+@api.get("/quotations/{qid}/pdf")
+async def get_quotation_pdf(qid: str, _: dict = Depends(require_role("admin", "manager"))):
+    """Render (or re-render) the quotation PDF and return its public path."""
+    from fastapi.responses import FileResponse
+    quote = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    pdf = await _generate_quote_pdf(quote)
+    return FileResponse(str(pdf), media_type="application/pdf", filename=pdf.name)
+
+
 @api.get("/dashboard/quote-stats")
 async def quote_stats(_: dict = Depends(get_current_user)):
     statuses = ["draft", "sent", "approved", "rejected", "revised", "expired"]
@@ -1320,6 +1346,9 @@ DEFAULT_INTEGRATIONS = {
         "otp_template_name": "",
         "otp_template_language": "en",
         "default_country_code": "91",
+        # Quote dispatch (Wave B-2)
+        "quote_template_name": "",
+        "quote_template_language": "en",
     },
     "smtp": {
         "enabled": False,
@@ -1440,6 +1469,180 @@ async def _send_whatsapp_text(wa: dict, phone: str, message: str) -> dict:
         raise HTTPException(status_code=502, detail=f"WhatsApp HTTP error: {e}")
 
 
+async def _fetch_whatsapp_templates(wa: dict) -> Any:
+    if not (wa.get("vendor_uid") and wa.get("token")):
+        raise HTTPException(status_code=400, detail="Save Vendor UID and Token first")
+    url = f"{wa['api_base_url'].rstrip('/')}/{wa['vendor_uid']}/contact/template-list"
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.get(url, params={"token": wa["token"]})
+        body = r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text
+        if r.status_code >= 400:
+            detail = body.get("message") if isinstance(body, dict) else str(body)
+            raise HTTPException(status_code=502, detail=f"Template list fetch failed: {detail}")
+        return body
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"WhatsApp HTTP error: {e}")
+
+
+async def _send_whatsapp_document(
+    wa: dict,
+    phone: str,
+    media_url: str,
+    file_name: str,
+    caption: Optional[str] = None,
+) -> dict:
+    if not (wa.get("enabled") and wa.get("vendor_uid") and wa.get("token")):
+        raise HTTPException(status_code=503, detail="WhatsApp integration is not configured")
+    url = f"{wa['api_base_url'].rstrip('/')}/{wa['vendor_uid']}/contact/send-media-message"
+    payload = {
+        "from_phone_number_id": wa.get("from_phone_number_id") or "",
+        "phone_number": _normalise_phone(phone, wa.get("default_country_code") or "91"),
+        "media_type": "document",
+        "media_url": media_url,
+        "file_name": file_name,
+        "caption": caption or "",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(url, params={"token": wa["token"]}, json=payload)
+        body = r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text
+        if r.status_code >= 400:
+            detail = body.get("message") if isinstance(body, dict) else str(body)
+            raise HTTPException(status_code=502, detail=f"WhatsApp document send failed: {detail}")
+        return body if isinstance(body, dict) else {"raw": body}
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"WhatsApp HTTP error: {e}")
+
+
+def _send_smtp_email(
+    sm: dict,
+    to_email: str,
+    subject: str,
+    body_text: str,
+    attachments: Optional[List[Path]] = None,
+) -> None:
+    """Synchronous SMTP send (called from async via run_in_executor)."""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.application import MIMEApplication
+    from email.utils import formataddr
+    msg = MIMEMultipart()
+    msg["Subject"] = subject
+    msg["From"] = formataddr((sm.get("from_name") or "HRE Exporter", sm["from_email"]))
+    msg["To"] = to_email
+    msg.attach(MIMEText(body_text, "plain", "utf-8"))
+    for path in (attachments or []):
+        if not path or not path.exists():
+            continue
+        with open(path, "rb") as f:
+            part = MIMEApplication(f.read(), _subtype="pdf")
+        part.add_header("Content-Disposition", "attachment", filename=path.name)
+        msg.attach(part)
+    if sm.get("use_ssl") or int(sm.get("port", 465)) == 465:
+        with smtplib.SMTP_SSL(sm["host"], int(sm.get("port", 465)), timeout=30) as server:
+            server.login(sm["username"], sm["password"])
+            server.sendmail(sm["from_email"], [to_email], msg.as_string())
+    else:
+        with smtplib.SMTP(sm["host"], int(sm.get("port", 587)), timeout=30) as server:
+            server.starttls()
+            server.login(sm["username"], sm["password"])
+            server.sendmail(sm["from_email"], [to_email], msg.as_string())
+
+
+async def _generate_quote_pdf(quote: dict) -> Path:
+    """Render the quote to a PDF saved under uploads/quotes/."""
+    from quote_pdf import render_quote_pdf
+    out_dir = UPLOAD_DIR / "quotes"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", quote.get("quote_number") or quote["id"])
+    out = out_dir / f"{safe_name}.pdf"
+    logo = UPLOAD_DIR.parent.parent / "frontend" / "public" / "hre-logo-light-bg.png"
+    logo_url = logo.as_uri() if logo.exists() else None
+    import asyncio
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, render_quote_pdf, quote, out, logo_url)
+    return out
+
+
+async def _dispatch_finalised_quote(quote: dict) -> dict:
+    """Generate PDF, then deliver via WhatsApp template + SMTP if configured.
+    Returns delivery telemetry. Never raises — failures are logged + returned."""
+    cur = await _get_integrations()
+    wa = cur["whatsapp"]
+    sm = cur["smtp"]
+    delivery = {"pdf": False, "whatsapp": False, "email": False, "errors": {}}
+    try:
+        pdf_path = await _generate_quote_pdf(quote)
+        delivery["pdf"] = True
+        delivery["pdf_path"] = pdf_path.name
+    except Exception as e:
+        logger.exception("[Quote PDF] generation failed")
+        delivery["errors"]["pdf"] = str(e)
+        return delivery
+
+    public_pdf_url = f"{PUBLIC_BASE_URL}/api/uploads/quotes/{pdf_path.name}" if PUBLIC_BASE_URL else None
+
+    # WhatsApp document template
+    if wa.get("enabled") and wa.get("vendor_uid") and wa.get("token") and wa.get("quote_template_name"):
+        if not public_pdf_url:
+            delivery["errors"]["whatsapp"] = "PUBLIC_BASE_URL not configured for media URL"
+        else:
+            try:
+                customer_name = quote.get("contact_company") or quote.get("contact_name") or ""
+                grand = f"{float(quote.get('grand_total') or 0):,.2f}"
+                await _send_whatsapp_template(
+                    wa,
+                    quote.get("contact_phone", ""),
+                    template_name=wa["quote_template_name"],
+                    template_language=wa.get("quote_template_language") or "en",
+                    field_1=customer_name,
+                    extra={
+                        "field_2": quote.get("quote_number", ""),
+                        "field_3": grand,
+                        "header_document": public_pdf_url,
+                        "header_document_name": f"{quote.get('quote_number') or 'quotation'}.pdf",
+                    },
+                )
+                delivery["whatsapp"] = True
+            except HTTPException as e:
+                delivery["errors"]["whatsapp"] = str(e.detail)
+            except Exception as e:
+                logger.exception("[Quote WA] dispatch failed")
+                delivery["errors"]["whatsapp"] = str(e)
+
+    # SMTP email
+    if sm.get("enabled") and sm.get("host") and sm.get("username") and sm.get("password") and sm.get("from_email"):
+        to_email = (quote.get("contact_email") or "").strip()
+        if to_email:
+            try:
+                subject = f"Quotation {quote.get('quote_number')} from HRE Exporter"
+                body = (
+                    f"Dear {quote.get('contact_name') or 'Sir/Madam'},\n\n"
+                    f"Please find attached the quotation {quote.get('quote_number')} for your inquiry.\n\n"
+                    f"Grand Total: ₹{float(quote.get('grand_total') or 0):,.2f}\n\n"
+                    f"For any queries, contact us at {SELLER_INFO_EMAIL}.\n\n"
+                    f"Regards,\nHRE Exporter Team"
+                )
+                import asyncio
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None, _send_smtp_email, sm, to_email, subject, body, [pdf_path],
+                )
+                delivery["email"] = True
+            except Exception as e:
+                logger.exception("[Quote SMTP] dispatch failed")
+                delivery["errors"]["email"] = str(e)
+        else:
+            delivery["errors"]["email"] = "no contact email"
+    return delivery
+
+
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+SELLER_INFO_EMAIL = "info@hrexporter.com"
+
+
 class WhatsAppSettingsIn(BaseModel):
     enabled: bool = False
     api_base_url: str = "https://bizchatapi.in/api"
@@ -1449,6 +1652,8 @@ class WhatsAppSettingsIn(BaseModel):
     otp_template_name: str = ""
     otp_template_language: str = "en"
     default_country_code: str = "91"
+    quote_template_name: str = ""
+    quote_template_language: str = "en"
 
 
 class SmtpSettingsIn(BaseModel):
@@ -1525,6 +1730,15 @@ async def test_whatsapp_send(data: WhatsAppTestIn, _: dict = Depends(require_rol
         button_0=data.sample_otp or "123456",
     )
     return {"ok": True, "mode": "template", "response": body}
+
+
+@api.get("/settings/whatsapp/templates")
+async def list_whatsapp_templates(_: dict = Depends(require_role("admin", "manager"))):
+    """Proxy to BizChatAPI template-list. Returns the raw response."""
+    cur = await _get_integrations()
+    wa = cur["whatsapp"]
+    body = await _fetch_whatsapp_templates(wa)
+    return body
 
 
 class SmtpTestIn(BaseModel):
@@ -1858,9 +2072,14 @@ async def public_qr_finalise(rid: str, payload: FinalisePayload, token: str):
         "approved_at": None, "rejected_at": None,
     }
     await db.quotations.insert_one(quote.copy())
-    # TODO Wave B: dispatch Hostinger SMTP email + WhatsApp here.
-    logger.info(f"[Self-Service Quote] {qnum} created for {contact.get('phone')}")
-    return {"id": quote["id"], "quote_number": qnum, "grand_total": quote["grand_total"]}
+    delivery = await _dispatch_finalised_quote(quote)
+    logger.info(f"[Self-Service Quote] {qnum} created for {contact.get('phone')} delivery={delivery}")
+    return {
+        "id": quote["id"],
+        "quote_number": qnum,
+        "grand_total": quote["grand_total"],
+        "delivery": delivery,
+    }
 
 
 @api.get("/public/my-quotes")
