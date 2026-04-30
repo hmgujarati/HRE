@@ -1387,6 +1387,8 @@ DEFAULT_INTEGRATIONS = {
         # Quote dispatch (Wave B-2)
         "quote_template_name": "",
         "quote_template_language": "en",
+        # Webhook receiver (Wave B-3)
+        "webhook_secret": "",
     },
     "smtp": {
         "enabled": False,
@@ -1409,6 +1411,14 @@ async def _get_integrations() -> dict:
     out = {**DEFAULT_INTEGRATIONS, **doc}
     out["whatsapp"] = {**DEFAULT_INTEGRATIONS["whatsapp"], **(doc.get("whatsapp") or {})}
     out["smtp"] = {**DEFAULT_INTEGRATIONS["smtp"], **(doc.get("smtp") or {})}
+    # Auto-generate a webhook secret once so the admin can register the URL
+    if not out["whatsapp"].get("webhook_secret"):
+        out["whatsapp"]["webhook_secret"] = secrets.token_urlsafe(24)
+        await db.settings.update_one(
+            {"id": SETTINGS_DOC_ID},
+            {"$set": {"whatsapp.webhook_secret": out["whatsapp"]["webhook_secret"], "id": SETTINGS_DOC_ID}},
+            upsert=True,
+        )
     return out
 
 
@@ -1802,6 +1812,7 @@ class WhatsAppSettingsIn(BaseModel):
     default_country_code: str = "91"
     quote_template_name: str = ""
     quote_template_language: str = "en"
+    webhook_secret_rotate: Optional[bool] = False  # non-persisted: trigger fresh secret
 
 
 class SmtpSettingsIn(BaseModel):
@@ -1823,7 +1834,15 @@ class IntegrationsIn(BaseModel):
 @api.get("/settings/integrations")
 async def get_integrations(_: dict = Depends(require_role("admin", "manager"))):
     cur = await _get_integrations()
-    return _public_integrations(cur)
+    resp = _public_integrations(cur)
+    # Expose the ready-to-register webhook URL for the BizChat admin console
+    if PUBLIC_BASE_URL and cur["whatsapp"].get("webhook_secret"):
+        resp["whatsapp"]["webhook_url"] = (
+            f"{PUBLIC_BASE_URL}/api/webhooks/bizchat/status?secret={cur['whatsapp']['webhook_secret']}"
+        )
+    else:
+        resp["whatsapp"]["webhook_url"] = ""
+    return resp
 
 
 @api.put("/settings/integrations")
@@ -1831,9 +1850,13 @@ async def update_integrations(data: IntegrationsIn, _: dict = Depends(require_ro
     cur = await _get_integrations()
     if data.whatsapp is not None:
         wa_in = data.whatsapp.model_dump()
+        # Handle secret rotation
+        rotate = wa_in.pop("webhook_secret_rotate", False)
         if wa_in.get("token") in (None, ""):
             wa_in["token"] = cur["whatsapp"].get("token", "")
         cur["whatsapp"] = {**cur["whatsapp"], **wa_in}
+        if rotate:
+            cur["whatsapp"]["webhook_secret"] = secrets.token_urlsafe(24)
     if data.smtp is not None:
         sm_in = data.smtp.model_dump()
         if sm_in.get("password") in (None, ""):
@@ -1847,7 +1870,12 @@ async def update_integrations(data: IntegrationsIn, _: dict = Depends(require_ro
         upsert=True,
     )
     refreshed = await _get_integrations()
-    return _public_integrations(refreshed)
+    resp = _public_integrations(refreshed)
+    if PUBLIC_BASE_URL and refreshed["whatsapp"].get("webhook_secret"):
+        resp["whatsapp"]["webhook_url"] = (
+            f"{PUBLIC_BASE_URL}/api/webhooks/bizchat/status?secret={refreshed['whatsapp']['webhook_secret']}"
+        )
+    return resp
 
 
 class WhatsAppTestIn(BaseModel):
@@ -1887,6 +1915,117 @@ async def list_whatsapp_templates(_: dict = Depends(require_role("admin", "manag
     wa = cur["whatsapp"]
     body = await _fetch_whatsapp_templates(wa)
     return body
+
+
+# ---------- Webhook receiver for BizChat status events ----------
+def _extract_status_events(payload: Any) -> List[Dict[str, Any]]:
+    """Return a list of {wamid, status, timestamp?} dicts from a webhook payload.
+    Handles multiple shapes: {wamid, status}, {data: {wamid, status}}, Meta
+    native {entry: [{changes: [{value: {statuses: [{id, status, timestamp}]}}]}]},
+    {statuses: [...]}, {event, payload: {...}} etc."""
+    out: List[Dict[str, Any]] = []
+
+    def add(wamid, status, timestamp=None):
+        if wamid and status:
+            out.append({
+                "wamid": str(wamid),
+                "status": str(status).lower(),
+                "timestamp": timestamp,
+            })
+
+    if not payload:
+        return out
+    if isinstance(payload, list):
+        for p in payload:
+            out.extend(_extract_status_events(p))
+        return out
+    if not isinstance(payload, dict):
+        return out
+
+    if payload.get("wamid") and payload.get("status"):
+        add(payload.get("wamid"), payload.get("status"), payload.get("updated_at") or payload.get("timestamp"))
+
+    data = payload.get("data")
+    if isinstance(data, dict) and data.get("wamid") and data.get("status"):
+        add(data.get("wamid"), data.get("status"), data.get("updated_at") or data.get("timestamp"))
+    if isinstance(data, list):
+        for d in data:
+            if isinstance(d, dict) and d.get("wamid") and d.get("status"):
+                add(d.get("wamid"), d.get("status"), d.get("updated_at") or d.get("timestamp"))
+
+    for s in (payload.get("statuses") or []):
+        if isinstance(s, dict):
+            add(s.get("id") or s.get("wamid"), s.get("status"), s.get("timestamp"))
+
+    for entry in (payload.get("entry") or []):
+        for ch in (entry.get("changes") or []):
+            val = ch.get("value") or {}
+            for s in (val.get("statuses") or []):
+                add(s.get("id") or s.get("wamid"), s.get("status"), s.get("timestamp"))
+
+    inner = payload.get("payload")
+    if isinstance(inner, dict):
+        out.extend(_extract_status_events(inner))
+
+    return out
+
+
+@api.api_route("/webhooks/bizchat/status", methods=["GET", "POST"])
+async def bizchat_status_webhook(request: Request, secret: Optional[str] = None):
+    """Public webhook endpoint for BizChat push events. Requires matching
+    `?secret=...` query param. Finds the quotation containing the wamid and
+    updates the corresponding dispatch_log entry's status. GET returns a
+    health-check JSON so BizChat's 'verify webhook' feature can succeed."""
+    cur = await _get_integrations()
+    expected = cur["whatsapp"].get("webhook_secret")
+    if not expected or not secret or secret != expected:
+        raise HTTPException(status_code=403, detail="invalid secret")
+
+    if request.method == "GET":
+        return {"ok": True, "service": "hre-crm", "webhook": "bizchat-status"}
+
+    try:
+        raw: Any = await request.json()
+    except Exception:
+        body_bytes = await request.body()
+        raw = {"raw": body_bytes.decode("utf-8", errors="replace")}
+
+    events = _extract_status_events(raw)
+
+    await db.webhook_events.insert_one({
+        "id": str(uuid.uuid4()),
+        "source": "bizchat",
+        "kind": "message.status",
+        "received_at": now_iso(),
+        "parsed_events": len(events),
+        "payload": raw,
+    })
+
+    updated = 0
+    for ev in events:
+        wamid = ev["wamid"]
+        new_status = ev["status"]
+        ts = ev.get("timestamp") or now_iso()
+        res = await db.quotations.update_one(
+            {"dispatch_log.wamid": wamid},
+            {"$set": {
+                "dispatch_log.$.status": new_status,
+                "dispatch_log.$.status_updated_at": ts,
+            }},
+        )
+        if res.modified_count:
+            updated += 1
+            logger.info(f"[WA WEBHOOK] wamid={wamid[:30]}… status={new_status}")
+    return {"ok": True, "events": len(events), "updated": updated}
+
+
+@api.get("/settings/whatsapp/webhook-events")
+async def recent_webhook_events(_: dict = Depends(require_role("admin", "manager"))):
+    """Last 20 webhook events — for debugging registration + shape verification."""
+    cur = db.webhook_events.find({}, {"_id": 0}).sort("received_at", -1).limit(20)
+    return await cur.to_list(length=20)
+
+
 
 
 class SmtpTestIn(BaseModel):

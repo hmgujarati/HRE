@@ -192,6 +192,48 @@ function WhatsAppTab({ canEdit }) {
               <FloppyDisk size={14} weight="bold" /> {busy ? "Saving…" : "Save WhatsApp Settings"}
             </button>
           </div>
+
+          {data.whatsapp.webhook_url && (
+            <div className="sm:col-span-2 border-t border-zinc-200 mt-2 pt-4">
+              <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Status Webhook</div>
+              <h4 className="font-heading font-black text-base mb-1">Real-time Delivery Push</h4>
+              <div className="text-xs text-zinc-500 mb-3">
+                Copy this URL into BizChat's <span className="font-bold">Webhook</span> settings (Message-Status or message.status event). When the customer's phone receives / reads the PDF, we'll update the quote pill instantly — no polling needed.
+              </div>
+              <div className="flex items-center gap-2 border border-zinc-300 bg-zinc-50 px-3 py-2 font-mono text-[11px] break-all">
+                <span className="flex-1" data-testid="wa-webhook-url">{data.whatsapp.webhook_url}</span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(data.whatsapp.webhook_url);
+                      toast.success("Webhook URL copied");
+                    } catch { toast.error("Could not copy. Please select and copy manually."); }
+                  }}
+                  className="shrink-0 bg-[#1A1A1A] hover:bg-black text-white text-[10px] uppercase tracking-wider font-bold px-3 py-1.5"
+                  data-testid="wa-webhook-copy"
+                >Copy</button>
+              </div>
+              <div className="text-[10px] text-zinc-500 mt-2">
+                Secret is baked into the URL — keep the URL private. Rotate anytime with the <span className="font-mono">Rotate Secret</span> button below.
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!window.confirm("Rotate the webhook secret? You'll need to update the URL in BizChat after this.")) return;
+                  try {
+                    await api.put("/settings/integrations", { whatsapp: { ...form, webhook_secret_rotate: true } });
+                    toast.success("Secret rotated — refresh to see new URL");
+                    load();
+                  } catch (err) { toast.error(formatApiError(err?.response?.data?.detail)); }
+                }}
+                className="mt-2 text-[10px] uppercase tracking-wider font-bold text-zinc-600 hover:text-red-600"
+                data-testid="wa-webhook-rotate"
+              >
+                Rotate Secret
+              </button>
+            </div>
+          )}
         </form>
       </div>
 
