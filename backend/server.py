@@ -1963,6 +1963,19 @@ def _extract_status_events(payload: Any) -> List[Dict[str, Any]]:
             for s in (val.get("statuses") or []):
                 add(s.get("id") or s.get("wamid"), s.get("status"), s.get("timestamp"))
 
+    # Shape F: BizChat native — {message: {whatsapp_message_id, status}, ...}
+    msg = payload.get("message")
+    if isinstance(msg, dict):
+        wid = msg.get("whatsapp_message_id") or msg.get("wamid") or msg.get("id")
+        st = msg.get("status")
+        if wid and st:
+            add(wid, st, msg.get("updated_at") or msg.get("timestamp"))
+
+    # Shape G: BizChat may nest the Meta envelope under `whatsapp_webhook_payload`
+    inner_meta = payload.get("whatsapp_webhook_payload")
+    if isinstance(inner_meta, dict):
+        out.extend(_extract_status_events(inner_meta))
+
     inner = payload.get("payload")
     if isinstance(inner, dict):
         out.extend(_extract_status_events(inner))
@@ -2001,11 +2014,21 @@ async def bizchat_status_webhook(request: Request, secret: Optional[str] = None)
         "payload": raw,
     })
 
+    STATUS_RANK = {"accepted": 1, "sent": 2, "delivered": 3, "read": 4, "failed": 5, "pending": 0}
     updated = 0
     for ev in events:
         wamid = ev["wamid"]
         new_status = ev["status"]
         ts = ev.get("timestamp") or now_iso()
+        # Only upgrade status, never downgrade (late "sent" mustn't overwrite "read")
+        quote = await db.quotations.find_one({"dispatch_log.wamid": wamid}, {"_id": 0, "dispatch_log": 1})
+        if not quote:
+            continue
+        cur_entry = next((e for e in quote.get("dispatch_log", []) if e.get("wamid") == wamid), None)
+        if not cur_entry:
+            continue
+        if STATUS_RANK.get(new_status, 0) <= STATUS_RANK.get(cur_entry.get("status", "pending"), 0):
+            continue
         res = await db.quotations.update_one(
             {"dispatch_log.wamid": wamid},
             {"$set": {
