@@ -4,6 +4,7 @@ import api from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import { Plus, MagnifyingGlass, FileText, Funnel } from "@phosphor-icons/react";
 import QuoteStatusBadge from "@/components/QuoteStatusBadge";
+import { DeliveryStrip } from "@/components/DeliveryPill";
 
 export default function Quotations() {
   const [items, setItems] = useState([]);
@@ -85,6 +86,7 @@ export default function Quotations() {
                 <th className="px-6 py-3">Customer</th>
                 <th className="px-6 py-3">Date</th>
                 <th className="px-6 py-3">Status</th>
+                <th className="px-6 py-3">Delivery</th>
                 <th className="px-6 py-3 text-right">Lines</th>
                 <th className="px-6 py-3 text-right">Total ₹</th>
               </tr>
@@ -101,12 +103,13 @@ export default function Quotations() {
                   </td>
                   <td className="px-6 py-3 text-xs font-mono text-zinc-500">{new Date(q.created_at).toLocaleDateString()}</td>
                   <td className="px-6 py-3"><QuoteStatusBadge status={q.status} /></td>
+                  <td className="px-6 py-3"><DeliveryStrip log={q.dispatch_log} size="xs" /></td>
                   <td className="px-6 py-3 text-right font-mono">{(q.line_items || []).length}</td>
                   <td className="px-6 py-3 text-right font-mono font-bold text-[#1A1A1A]">₹{(q.grand_total || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                 </tr>
               ))}
               {!items.length && (
-                <tr><td colSpan={6} className="px-6 py-12 text-center text-zinc-400">
+                <tr><td colSpan={7} className="px-6 py-12 text-center text-zinc-400">
                   <FileText size={32} weight="thin" className="mx-auto mb-2 text-zinc-300" />
                   No quotations yet. Click <strong>New Quotation</strong> to create one.
                 </td></tr>

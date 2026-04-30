@@ -15,6 +15,14 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - **Manager** — view + edit product/pricing data, image uploads, bulk discount
 - **Employee** — read-only on catalogue/pricing
 
+## Delivery Status Tracking & Dispatch Log — implemented (2026-04-30)
+- Each dispatch now persists a `dispatch_log` entry on the quotation doc: `{id, channel, template, to, wamid, log_uid, pdf_file, pdf_url, sent_at, status, status_updated_at?, error?}`
+- WhatsApp response body's `data.wamid` / `data.log_uid` / `data.status` captured at send time
+- New endpoint `POST /api/quotations/{qid}/refresh-delivery` polls BizChatAPI `contact/message-status?wamid=...` for each non-terminal WA entry and updates `status` / `status_updated_at`
+- Frontend `<DeliveryStrip>` + `<DeliveryPill>` components show channel-aware status chips (Queued → Sent → Delivered → Read, with Failed variant)
+- Quotations list table: new `Delivery` column showing the latest status-per-channel strip
+- QuotationView: `DispatchLogPanel` with a "Refresh Status" button + a reverse-chronological timeline of every dispatch attempt
+
 ## Quote PDF Dispatch (WhatsApp + Email) — implemented (2026-04-30)
 - New module `/app/backend/quote_pdf.py`: server-side PDF generator using **Jinja2 + WeasyPrint**, replicates the on-screen `QuotationView.jsx` layout with full outer frame (top/right/bottom/left borders all enclosed)
 - Each dispatch writes a **timestamped** PDF (`{quote_no}_{YYYYMMDDHHMMSS}.pdf`) so WhatsApp/Meta media cache never serves a stale copy; admin preview uses stable filename

@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
-import { ArrowLeft, PencilSimple, Printer, ArrowsClockwise, Check, X, PaperPlaneTilt, WhatsappLogo } from "@phosphor-icons/react";
+import { ArrowLeft, PencilSimple, Printer, ArrowsClockwise, Check, X, PaperPlaneTilt, WhatsappLogo, Envelope } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import QuoteStatusBadge from "@/components/QuoteStatusBadge";
+import { DeliveryPill, latestByChannel } from "@/components/DeliveryPill";
 import { numberToWordsINR } from "@/lib/numberToWords";
 
 // Seller details (HREXPORTER) — to become editable in Settings later
@@ -107,6 +108,24 @@ export default function QuotationView() {
     }
   };
 
+  const [refreshingDelivery, setRefreshingDelivery] = useState(false);
+  const refreshDelivery = async () => {
+    setRefreshingDelivery(true);
+    try {
+      const r = await api.post(`/quotations/${id}/refresh-delivery`);
+      if (r.data.updates) {
+        toast.success(`Delivery status refreshed (${r.data.updates} update${r.data.updates === 1 ? '' : 's'})`);
+      } else {
+        toast("Delivery status is up-to-date", { icon: "✓" });
+      }
+      load();
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail));
+    } finally {
+      setRefreshingDelivery(false);
+    }
+  };
+
   if (!quote) return <div className="p-8 text-zinc-400">Loading…</div>;
 
   const canEdit = !["approved", "rejected"].includes(quote.status);
@@ -179,6 +198,12 @@ export default function QuotationView() {
           )}
         </div>
       </div>
+
+      <DispatchLogPanel
+        log={quote.dispatch_log || []}
+        refreshDelivery={refreshDelivery}
+        refreshing={refreshingDelivery}
+      />
 
       {/* Printable quotation */}
       <div className="p-8 print:p-0">
@@ -383,6 +408,67 @@ export default function QuotationView() {
           #printable-quote { box-shadow: none !important; border: 0 !important; max-width: 100% !important; }
         }
       `}</style>
+    </div>
+  );
+}
+
+function DispatchLogPanel({ log, refreshDelivery, refreshing }) {
+  if (!log || !log.length) return null;
+  const latest = latestByChannel(log);
+  // Sort all entries desc by sent_at for the detailed timeline
+  const sorted = [...log].sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at));
+  const hasWhatsApp = !!latest.whatsapp;
+  const hasRefreshable = sorted.some((e) => e.channel === "whatsapp" && e.wamid && !["read", "failed"].includes(e.status));
+  return (
+    <div className="px-8 py-4 border-b border-zinc-200 bg-white print:hidden">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17]">Delivery Log</div>
+          <h3 className="font-heading font-black text-base">
+            {hasWhatsApp ? (
+              <>Customer delivery — <DeliveryPill channel="whatsapp" status={latest.whatsapp.status} /> {latest.email && <DeliveryPill channel="email" status={latest.email.status} />}</>
+            ) : (
+              <>Delivery history ({sorted.length})</>
+            )}
+          </h3>
+        </div>
+        {hasRefreshable && (
+          <button
+            onClick={refreshDelivery}
+            disabled={refreshing}
+            data-testid="refresh-delivery-btn"
+            className="px-3 py-2 border border-zinc-300 hover:border-[#FBAE17] text-xs uppercase tracking-wider font-bold flex items-center gap-2 disabled:opacity-60"
+          >
+            <ArrowsClockwise size={12} weight="bold" className={refreshing ? "animate-spin" : ""} />
+            {refreshing ? "Refreshing…" : "Refresh Status"}
+          </button>
+        )}
+      </div>
+      <div className="border border-zinc-200 divide-y divide-zinc-100 text-xs">
+        {sorted.map((e) => (
+          <div key={e.id} className="px-4 py-2 flex items-center gap-3" data-testid={`dispatch-entry-${e.id}`}>
+            <div className="shrink-0">
+              {e.channel === "whatsapp" ? <WhatsappLogo size={16} weight="fill" className="text-[#25D366]" /> : <Envelope size={16} weight="fill" className="text-[#FBAE17]" />}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-bold uppercase text-[10px] tracking-wider">{e.channel}</span>
+                <DeliveryPill channel={e.channel} status={e.status} />
+                {e.template && <span className="text-[10px] text-zinc-500 font-mono">tpl: {e.template}</span>}
+              </div>
+              <div className="text-[10px] text-zinc-500 font-mono mt-0.5 truncate">
+                {e.to}
+                {e.wamid && <> · <span title={e.wamid}>{e.wamid.slice(0, 28)}…</span></>}
+                {e.error && <span className="text-red-600"> · {e.error}</span>}
+              </div>
+            </div>
+            <div className="text-[10px] text-zinc-400 font-mono whitespace-nowrap text-right">
+              <div>{new Date(e.sent_at).toLocaleString()}</div>
+              {e.status_updated_at && <div>↻ {new Date(e.status_updated_at).toLocaleString()}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

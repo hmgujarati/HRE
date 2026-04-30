@@ -1289,6 +1289,44 @@ async def send_quotation_dispatch(qid: str, _: dict = Depends(require_role("admi
     return delivery
 
 
+@api.post("/quotations/{qid}/refresh-delivery")
+async def refresh_quotation_delivery(qid: str, _: dict = Depends(require_role("admin", "manager"))):
+    """Poll BizChat message-status for every WhatsApp dispatch log entry that isn't
+    in a terminal state yet and update the stored status in-place."""
+    quote = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    cur = await _get_integrations()
+    wa = cur["whatsapp"]
+    log = list(quote.get("dispatch_log") or [])
+    TERMINAL = {"read", "failed"}
+    updates = 0
+    for entry in log:
+        if entry.get("channel") != "whatsapp":
+            continue
+        if entry.get("status") in TERMINAL:
+            continue
+        wamid = entry.get("wamid")
+        if not wamid:
+            continue
+        try:
+            data = await _get_whatsapp_message_status(wa, wamid)
+            new_status = (data or {}).get("status")
+            if new_status and new_status != entry.get("status"):
+                entry["status"] = new_status
+                entry["status_updated_at"] = (data or {}).get("updated_at") or now_iso()
+                updates += 1
+        except HTTPException as e:
+            entry["status_error"] = str(e.detail)
+        except Exception as e:
+            entry["status_error"] = str(e)
+    if updates or any("status_error" in e for e in log):
+        await db.quotations.update_one({"id": qid}, {"$set": {"dispatch_log": log}})
+    # Return updated quote for the UI to re-render
+    updated = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    return {"updates": updates, "dispatch_log": (updated or {}).get("dispatch_log", [])}
+
+
 @api.get("/quotations/{qid}/pdf")
 async def get_quotation_pdf(qid: str, _: dict = Depends(require_role("admin", "manager"))):
     """Render (or re-render) the quotation PDF and return its public path."""
@@ -1413,7 +1451,8 @@ async def _send_whatsapp_template(
     button_0: Optional[str] = None,
     extra: Optional[dict] = None,
 ) -> dict:
-    """Send a WhatsApp template via BizChatAPI. Raises HTTPException on failure."""
+    """Send a WhatsApp template via BizChatAPI. Raises HTTPException on failure.
+    Returns BizChat response body (includes data.wamid, data.status, data.log_uid)."""
     if not (wa.get("enabled") and wa.get("vendor_uid") and wa.get("token") and template_name):
         raise HTTPException(status_code=503, detail="WhatsApp integration is not configured")
     url = f"{wa['api_base_url'].rstrip('/')}/{wa['vendor_uid']}/contact/send-template-message"
@@ -1441,10 +1480,32 @@ async def _send_whatsapp_template(
             logger.error(f"[WA] template send failed status={r.status_code} body={body}")
             detail = body.get("message") if isinstance(body, dict) else str(body)
             raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {detail}")
+        # Treat "result": "error" in body as failure too
+        if isinstance(body, dict) and body.get("result") == "error":
+            detail = body.get("message") or "Unknown BizChat error"
+            logger.error(f"[WA] template send error body={body}")
+            raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {detail}")
         logger.info(f"[WA] template={template_name} → {payload['phone_number']} ok")
         return body if isinstance(body, dict) else {"raw": body}
     except httpx.HTTPError as e:
         logger.exception("[WA] HTTP error")
+        raise HTTPException(status_code=502, detail=f"WhatsApp HTTP error: {e}")
+
+
+async def _get_whatsapp_message_status(wa: dict, wamid: str) -> dict:
+    """Poll BizChat message-status endpoint. Returns {status, created_at, updated_at}."""
+    if not (wa.get("vendor_uid") and wa.get("token")):
+        raise HTTPException(status_code=400, detail="WhatsApp credentials missing")
+    url = f"{wa['api_base_url'].rstrip('/')}/{wa['vendor_uid']}/contact/message-status"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(url, params={"wamid": wamid, "token": wa["token"]})
+        body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {"raw": r.text}
+        if r.status_code >= 400 or (isinstance(body, dict) and body.get("result") == "error"):
+            detail = body.get("message") if isinstance(body, dict) else str(body)
+            raise HTTPException(status_code=502, detail=f"Status fetch failed: {detail}")
+        return body.get("data") or {}
+    except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"WhatsApp HTTP error: {e}")
 
 
@@ -1575,12 +1636,12 @@ async def _generate_quote_pdf(quote: dict, unique: bool = False) -> Path:
 async def _dispatch_finalised_quote(quote: dict) -> dict:
     """Generate PDF, then deliver via WhatsApp template + SMTP if configured.
     Returns delivery telemetry. Never raises — failures are logged + returned.
-    Resolves email/phone from the latest contact record so post-creation contact
-    edits propagate to dispatch."""
+    Also appends a dispatch log entry to the quotation document."""
     cur = await _get_integrations()
     wa = cur["whatsapp"]
     sm = cur["smtp"]
     delivery = {"pdf": False, "whatsapp": False, "email": False, "errors": {}}
+    log_entries: List[Dict[str, Any]] = []
 
     # Pull fresh contact snapshot for email/phone — quote stores a snapshot at creation.
     contact_email = (quote.get("contact_email") or "").strip()
@@ -1605,12 +1666,27 @@ async def _dispatch_finalised_quote(quote: dict) -> dict:
         return delivery
 
     public_pdf_url = f"{PUBLIC_BASE_URL}/api/uploads/quotes/{pdf_path.name}" if PUBLIC_BASE_URL else None
+    dispatched_at = now_iso()
 
     # WhatsApp document template
     if wa.get("enabled") and wa.get("vendor_uid") and wa.get("token") and wa.get("quote_template_name"):
+        wa_entry: Dict[str, Any] = {
+            "id": str(uuid.uuid4()),
+            "channel": "whatsapp",
+            "template": wa["quote_template_name"],
+            "to": _normalise_phone(contact_phone, wa.get("default_country_code") or "91") if contact_phone else "",
+            "pdf_file": pdf_path.name,
+            "pdf_url": public_pdf_url,
+            "sent_at": dispatched_at,
+            "status": "pending",
+        }
         if not contact_phone:
+            wa_entry["status"] = "failed"
+            wa_entry["error"] = "no contact phone"
             delivery["errors"]["whatsapp"] = "no contact phone"
         elif not public_pdf_url:
+            wa_entry["status"] = "failed"
+            wa_entry["error"] = "PUBLIC_BASE_URL not configured"
             delivery["errors"]["whatsapp"] = "PUBLIC_BASE_URL not configured for media URL"
         else:
             try:
@@ -1627,7 +1703,7 @@ async def _dispatch_finalised_quote(quote: dict) -> dict:
                         valid_str = f"{line_count} item{'s' if line_count != 1 else ''} · validity 30 days"
                 else:
                     valid_str = f"{line_count} item{'s' if line_count != 1 else ''} · validity 30 days"
-                await _send_whatsapp_template(
+                body = await _send_whatsapp_template(
                     wa,
                     contact_phone,
                     template_name=wa["quote_template_name"],
@@ -1641,19 +1717,36 @@ async def _dispatch_finalised_quote(quote: dict) -> dict:
                         "header_document_name": f"{quote.get('quote_number') or 'quotation'}.pdf",
                     },
                 )
+                data = body.get("data") if isinstance(body, dict) else None
+                wa_entry["wamid"] = (data or {}).get("wamid")
+                wa_entry["log_uid"] = (data or {}).get("log_uid")
+                wa_entry["status"] = (data or {}).get("status", "sent") or "sent"
                 delivery["whatsapp"] = True
             except HTTPException as e:
+                wa_entry["status"] = "failed"
+                wa_entry["error"] = str(e.detail)
                 delivery["errors"]["whatsapp"] = str(e.detail)
             except Exception as e:
                 logger.exception("[Quote WA] dispatch failed")
+                wa_entry["status"] = "failed"
+                wa_entry["error"] = str(e)
                 delivery["errors"]["whatsapp"] = str(e)
+        log_entries.append(wa_entry)
 
     # SMTP email
     if sm.get("enabled") and sm.get("host") and sm.get("username") and sm.get("password") and sm.get("from_email"):
+        email_entry: Dict[str, Any] = {
+            "id": str(uuid.uuid4()),
+            "channel": "email",
+            "to": contact_email,
+            "pdf_file": pdf_path.name,
+            "sent_at": dispatched_at,
+            "status": "pending",
+        }
         if contact_email:
             try:
                 subject = f"Quotation {quote.get('quote_number')} from HRE Exporter"
-                body = (
+                body_txt = (
                     f"Dear {contact_name or 'Sir/Madam'},\n\n"
                     f"Please find attached the quotation {quote.get('quote_number')} for your inquiry.\n\n"
                     f"Grand Total: ₹{float(quote.get('grand_total') or 0):,.2f}\n\n"
@@ -1663,14 +1756,34 @@ async def _dispatch_finalised_quote(quote: dict) -> dict:
                 import asyncio
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(
-                    None, _send_smtp_email, sm, contact_email, subject, body, [pdf_path],
+                    None, _send_smtp_email, sm, contact_email, subject, body_txt, [pdf_path],
                 )
+                email_entry["status"] = "sent"
                 delivery["email"] = True
             except Exception as e:
                 logger.exception("[Quote SMTP] dispatch failed")
+                email_entry["status"] = "failed"
+                email_entry["error"] = str(e)
                 delivery["errors"]["email"] = str(e)
         else:
+            email_entry["status"] = "failed"
+            email_entry["error"] = "no contact email"
             delivery["errors"]["email"] = "no contact email"
+        log_entries.append(email_entry)
+
+    if log_entries:
+        try:
+            await db.quotations.update_one(
+                {"id": quote["id"]},
+                {
+                    "$push": {"dispatch_log": {"$each": log_entries}},
+                    "$set": {"last_dispatched_at": dispatched_at},
+                },
+            )
+        except Exception:
+            logger.exception("[Dispatch] failed to persist dispatch log")
+
+    delivery["log_entries"] = log_entries
     return delivery
 
 
