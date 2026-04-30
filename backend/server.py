@@ -1592,34 +1592,46 @@ def _send_smtp_email(
     subject: str,
     body_text: str,
     attachments: Optional[List[Path]] = None,
+    body_html: Optional[str] = None,
 ) -> None:
-    """Synchronous SMTP send (called from async via run_in_executor)."""
+    """Synchronous SMTP send (called from async via run_in_executor).
+    If body_html is provided, sends a multipart/alternative with both text + html,
+    so tracking pixels inside HTML still render in HTML-capable clients."""
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
     from email.mime.application import MIMEApplication
     from email.utils import formataddr
-    msg = MIMEMultipart()
-    msg["Subject"] = subject
-    msg["From"] = formataddr((sm.get("from_name") or "HRE Exporter", sm["from_email"]))
-    msg["To"] = to_email
-    msg.attach(MIMEText(body_text, "plain", "utf-8"))
+
+    outer = MIMEMultipart("mixed")
+    outer["Subject"] = subject
+    outer["From"] = formataddr((sm.get("from_name") or "HRE Exporter", sm["from_email"]))
+    outer["To"] = to_email
+
+    if body_html:
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText(body_text, "plain", "utf-8"))
+        alt.attach(MIMEText(body_html, "html", "utf-8"))
+        outer.attach(alt)
+    else:
+        outer.attach(MIMEText(body_text, "plain", "utf-8"))
+
     for path in (attachments or []):
         if not path or not path.exists():
             continue
         with open(path, "rb") as f:
             part = MIMEApplication(f.read(), _subtype="pdf")
         part.add_header("Content-Disposition", "attachment", filename=path.name)
-        msg.attach(part)
+        outer.attach(part)
     if sm.get("use_ssl") or int(sm.get("port", 465)) == 465:
         with smtplib.SMTP_SSL(sm["host"], int(sm.get("port", 465)), timeout=30) as server:
             server.login(sm["username"], sm["password"])
-            server.sendmail(sm["from_email"], [to_email], msg.as_string())
+            server.sendmail(sm["from_email"], [to_email], outer.as_string())
     else:
         with smtplib.SMTP(sm["host"], int(sm.get("port", 587)), timeout=30) as server:
             server.starttls()
             server.login(sm["username"], sm["password"])
-            server.sendmail(sm["from_email"], [to_email], msg.as_string())
+            server.sendmail(sm["from_email"], [to_email], outer.as_string())
 
 
 async def _generate_quote_pdf(quote: dict, unique: bool = False) -> Path:
@@ -1755,18 +1767,50 @@ async def _dispatch_finalised_quote(quote: dict) -> dict:
         }
         if contact_email:
             try:
+                open_token = secrets.token_urlsafe(24)
+                email_entry["open_token"] = open_token
+                pixel_url = (
+                    f"{PUBLIC_BASE_URL}/api/webhooks/email/open?t={open_token}"
+                    if PUBLIC_BASE_URL else ""
+                )
                 subject = f"Quotation {quote.get('quote_number')} from HRE Exporter"
+                grand_txt = f"₹{float(quote.get('grand_total') or 0):,.2f}"
                 body_txt = (
                     f"Dear {contact_name or 'Sir/Madam'},\n\n"
                     f"Please find attached the quotation {quote.get('quote_number')} for your inquiry.\n\n"
-                    f"Grand Total: ₹{float(quote.get('grand_total') or 0):,.2f}\n\n"
+                    f"Grand Total: {grand_txt}\n\n"
                     f"For any queries, contact us at {SELLER_INFO_EMAIL}.\n\n"
                     f"Regards,\nHRE Exporter Team"
                 )
+                body_html = f"""<!DOCTYPE html>
+<html><body style="font-family: Arial, Helvetica, sans-serif; color: #1A1A1A; background: #f5f5f5; margin:0; padding:24px;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width: 580px; margin: 0 auto; background:#fff; border:1px solid #e5e5e5;">
+    <tr><td style="padding: 24px 28px; border-bottom: 3px solid #FBAE17;">
+      <div style="font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color:#FBAE17; font-weight:bold;">HREXPORTER · Quotation</div>
+      <h1 style="margin: 6px 0 0; font-size: 22px; letter-spacing: -0.5px;">{quote.get('quote_number','')}</h1>
+    </td></tr>
+    <tr><td style="padding: 24px 28px; font-size: 14px; line-height: 1.6;">
+      <p style="margin:0 0 14px;">Dear <strong>{contact_name or 'Sir/Madam'}</strong>,</p>
+      <p style="margin:0 0 14px;">Please find the attached quotation for your recent inquiry. You can open it on any phone or desktop — it carries our full GST breakdown, bank details and terms.</p>
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#FBAE17; margin: 14px 0;">
+        <tr><td style="padding: 14px 18px;">
+          <div style="font-size: 10px; letter-spacing: 2px; text-transform: uppercase; font-weight: bold;">Grand Total</div>
+          <div style="font-size: 24px; font-weight: 900; font-family: 'Courier New', monospace;">{grand_txt}</div>
+        </td></tr>
+      </table>
+      <p style="margin:0 0 6px;">If you have any questions, reply to this email or WhatsApp us — we'd love to help finalize this order for you.</p>
+      <p style="margin: 14px 0 0; color: #666; font-size: 12px;">Regards,<br/><strong>HRE Exporter Team</strong><br/><a href="mailto:{SELLER_INFO_EMAIL}" style="color:#1A1A1A;">{SELLER_INFO_EMAIL}</a></p>
+    </td></tr>
+    <tr><td style="padding: 14px 28px; font-size: 10px; color:#999; border-top:1px solid #eee;">
+      This quotation is confidential and intended for {contact_email}. If you received this by mistake, please delete it.
+    </td></tr>
+  </table>
+  {f'<img src="{pixel_url}" width="1" height="1" alt="" style="display:block; border:0;" />' if pixel_url else ''}
+</body></html>"""
                 import asyncio
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(
-                    None, _send_smtp_email, sm, contact_email, subject, body_txt, [pdf_path],
+                    None, _send_smtp_email, sm, contact_email, subject, body_txt, [pdf_path], body_html,
                 )
                 email_entry["status"] = "sent"
                 delivery["email"] = True
@@ -2047,6 +2091,49 @@ async def recent_webhook_events(_: dict = Depends(require_role("admin", "manager
     """Last 20 webhook events — for debugging registration + shape verification."""
     cur = db.webhook_events.find({}, {"_id": 0}).sort("received_at", -1).limit(20)
     return await cur.to_list(length=20)
+
+
+# 1×1 transparent GIF served by the email-open endpoint
+_OPEN_PIXEL_GIF = bytes.fromhex(
+    "47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b"
+)
+
+
+@api.api_route("/webhooks/email/open", methods=["GET", "HEAD"])
+async def email_open_tracking(t: Optional[str] = None):
+    """Invisible tracking pixel. When a recipient's email client loads this
+    image, mark the corresponding dispatch_log entry as `read`."""
+    from fastapi.responses import Response
+    if t:
+        try:
+            quote = await db.quotations.find_one(
+                {"dispatch_log.open_token": t},
+                {"_id": 0, "id": 1, "dispatch_log": 1},
+            )
+            if quote:
+                # Only upgrade sent → read, not downgrade/overwrite failed/read
+                entry = next((e for e in quote.get("dispatch_log", []) if e.get("open_token") == t), None)
+                if entry and entry.get("status") == "sent":
+                    await db.quotations.update_one(
+                        {"id": quote["id"], "dispatch_log.open_token": t},
+                        {"$set": {
+                            "dispatch_log.$.status": "read",
+                            "dispatch_log.$.status_updated_at": now_iso(),
+                        }},
+                    )
+                    logger.info(f"[EMAIL OPEN] quote={quote['id']} token={t[:10]}… → read")
+        except Exception:
+            logger.exception("[EMAIL OPEN] failed to process")
+    # Always return the pixel + no-cache headers so every open is logged
+    return Response(
+        content=_OPEN_PIXEL_GIF,
+        media_type="image/gif",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 

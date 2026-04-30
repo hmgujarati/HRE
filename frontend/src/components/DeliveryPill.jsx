@@ -11,6 +11,8 @@ const WA_STATUS_META = {
 
 const EMAIL_STATUS_META = {
   sent: { label: "Emailed", color: "bg-emerald-100 text-emerald-800", Icon: CheckCircle },
+  delivered: { label: "Delivered", color: "bg-emerald-100 text-emerald-800", Icon: CheckCircle },
+  read: { label: "Opened", color: "bg-violet-100 text-violet-800", Icon: Eye },
   pending: { label: "Pending", color: "bg-zinc-100 text-zinc-600", Icon: Clock },
   failed: { label: "Failed", color: "bg-red-100 text-red-800", Icon: Warning },
 };
