@@ -176,9 +176,15 @@ function WhatsAppTab({ canEdit }) {
             </button>
           </div>
 
-          <TemplateField label="OTP Template Name" testId="wa-template-name" value={form.otp_template_name} onChange={(v) => setForm({ ...form, otp_template_name: v })} options={tplNames} disabled={!canEdit} placeholder="otp" hint="Authentication template with body containing {{1}}" />
+          <TemplateField label="OTP Template Name" testId="wa-template-name" value={form.otp_template_name} onChange={(v) => {
+            const langs = tplLangsByName[v] ? Array.from(tplLangsByName[v]) : [];
+            setForm({ ...form, otp_template_name: v, otp_template_language: langs.includes(form.otp_template_language) ? form.otp_template_language : (langs[0] || form.otp_template_language) });
+          }} options={tplNames} disabled={!canEdit} placeholder="otp" hint="Authentication template with body containing {{1}}" />
           <TemplateField label="OTP Template Language" testId="wa-template-lang" value={form.otp_template_language} onChange={(v) => setForm({ ...form, otp_template_language: v })} options={otpLangs} disabled={!canEdit} placeholder="en or en_us" />
-          <TemplateField label="Quote Dispatch Template Name" testId="wa-quote-template-name" value={form.quote_template_name} onChange={(v) => setForm({ ...form, quote_template_name: v })} options={tplNames} disabled={!canEdit} placeholder="hre_quote_pdf" hint="Marketing/Utility template with Document header. Body vars: {{1}}=customer, {{2}}=quote#, {{3}}=total" />
+          <TemplateField label="Quote Dispatch Template Name" testId="wa-quote-template-name" value={form.quote_template_name} onChange={(v) => {
+            const langs = tplLangsByName[v] ? Array.from(tplLangsByName[v]) : [];
+            setForm({ ...form, quote_template_name: v, quote_template_language: langs.includes(form.quote_template_language) ? form.quote_template_language : (langs[0] || form.quote_template_language) });
+          }} options={tplNames} disabled={!canEdit} placeholder="hre_quote_pdf" hint="Marketing/Utility template with Document header. Body vars: {{1}}=customer, {{2}}=quote#, {{3}}=total" />
           <TemplateField label="Quote Template Language" testId="wa-quote-template-lang" value={form.quote_template_language} onChange={(v) => setForm({ ...form, quote_template_language: v })} options={quoteLangs} disabled={!canEdit} placeholder="en or en_us" />
 
           <div className="sm:col-span-2 flex justify-end pt-2">
