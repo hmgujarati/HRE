@@ -15,6 +15,13 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - **Manager** — view + edit product/pricing data, image uploads, bulk discount
 - **Employee** — read-only on catalogue/pricing
 
+## Real-time Delivery Webhooks + Email Read Tracking — implemented (2026-04-30)
+- BizChat webhook receiver at `POST /api/webhooks/bizchat/status?secret=...` parses 7 payload shapes (flat, `{data}`, `{statuses[]}`, Meta envelope, BizChat native `{message:{whatsapp_message_id, status}}`, nested `whatsapp_webhook_payload`, wrapped `payload`). Auto-generated webhook secret surfaced in Settings UI with Copy + Rotate buttons. GET health-check for BizChat's "Verify Webhook" step.
+- Status-rank guard on both webhook + polled updates so late-arriving `delivered` never overwrites `read`
+- Webhook event log persisted to `db.webhook_events` + admin-only read endpoint for debugging
+- Email "Read" via 1×1 tracking pixel: dispatch now generates `open_token` per-email, ships an HTML-styled body with `<img src="/api/webhooks/email/open?t=...">`; endpoint upgrades `sent`→`read` when client loads the pixel (supports GET+HEAD for image-prefetch clients)
+- Email body upgraded from plain text to multipart/alternative (plain + branded HTML) with gold accent, grand total block, and confidentiality footer
+
 ## Delivery Status Tracking & Dispatch Log — implemented (2026-04-30)
 - Each dispatch now persists a `dispatch_log` entry on the quotation doc: `{id, channel, template, to, wamid, log_uid, pdf_file, pdf_url, sent_at, status, status_updated_at?, error?}`
 - WhatsApp response body's `data.wamid` / `data.log_uid` / `data.status` captured at send time
