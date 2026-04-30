@@ -1551,13 +1551,19 @@ def _send_smtp_email(
             server.sendmail(sm["from_email"], [to_email], msg.as_string())
 
 
-async def _generate_quote_pdf(quote: dict) -> Path:
-    """Render the quote to a PDF saved under uploads/quotes/."""
+async def _generate_quote_pdf(quote: dict, unique: bool = False) -> Path:
+    """Render the quote to a PDF saved under uploads/quotes/.
+    When `unique=True`, a timestamp suffix is appended so caches (WhatsApp/Meta
+    media cache keyed on URL) always fetch a fresh copy."""
     from quote_pdf import render_quote_pdf
     out_dir = UPLOAD_DIR / "quotes"
     out_dir.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", quote.get("quote_number") or quote["id"])
-    out = out_dir / f"{safe_name}.pdf"
+    if unique:
+        ts = _now_dt().strftime("%Y%m%d%H%M%S")
+        out = out_dir / f"{safe_name}_{ts}.pdf"
+    else:
+        out = out_dir / f"{safe_name}.pdf"
     logo = UPLOAD_DIR.parent.parent / "frontend" / "public" / "hre-logo-light-bg.png"
     logo_url = logo.as_uri() if logo.exists() else None
     import asyncio
@@ -1590,7 +1596,7 @@ async def _dispatch_finalised_quote(quote: dict) -> dict:
             contact_company = contact_company or live.get("company") or ""
 
     try:
-        pdf_path = await _generate_quote_pdf(quote)
+        pdf_path = await _generate_quote_pdf(quote, unique=True)
         delivery["pdf"] = True
         delivery["pdf_path"] = pdf_path.name
     except Exception as e:
