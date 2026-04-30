@@ -1590,8 +1590,20 @@ async def _dispatch_finalised_quote(quote: dict) -> dict:
             delivery["errors"]["whatsapp"] = "PUBLIC_BASE_URL not configured for media URL"
         else:
             try:
-                customer_name = quote.get("contact_company") or quote.get("contact_name") or ""
-                grand = f"{float(quote.get('grand_total') or 0):,.2f}"
+                customer_name = quote.get("contact_name") or quote.get("contact_company") or "Customer"
+                grand_inr = float(quote.get("grand_total") or 0)
+                grand_str = f"Total: ₹{grand_inr:,.2f}"
+                line_count = len(quote.get("line_items") or [])
+                # Validity field: prefer valid_until, else item count + days
+                valid_iso = (quote.get("valid_until") or "").strip()
+                if valid_iso:
+                    try:
+                        d = datetime.fromisoformat(valid_iso)
+                        valid_str = f"Valid till {d.strftime('%d-%m-%Y')} · {line_count} item{'s' if line_count != 1 else ''}"
+                    except Exception:
+                        valid_str = f"{line_count} item{'s' if line_count != 1 else ''} · validity 30 days"
+                else:
+                    valid_str = f"{line_count} item{'s' if line_count != 1 else ''} · validity 30 days"
                 await _send_whatsapp_template(
                     wa,
                     quote.get("contact_phone", ""),
@@ -1600,7 +1612,8 @@ async def _dispatch_finalised_quote(quote: dict) -> dict:
                     field_1=customer_name,
                     extra={
                         "field_2": quote.get("quote_number", ""),
-                        "field_3": grand,
+                        "field_3": grand_str,
+                        "field_4": valid_str,
                         "header_document": public_pdf_url,
                         "header_document_name": f"{quote.get('quote_number') or 'quotation'}.pdf",
                     },

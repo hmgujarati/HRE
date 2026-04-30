@@ -184,7 +184,7 @@ function WhatsAppTab({ canEdit }) {
           <TemplateField label="Quote Dispatch Template Name" testId="wa-quote-template-name" value={form.quote_template_name} onChange={(v) => {
             const langs = tplLangsByName[v] ? Array.from(tplLangsByName[v]) : [];
             setForm({ ...form, quote_template_name: v, quote_template_language: langs.includes(form.quote_template_language) ? form.quote_template_language : (langs[0] || form.quote_template_language) });
-          }} options={tplNames} disabled={!canEdit} placeholder="hre_quote_pdf" hint="Marketing/Utility template with Document header. Body vars: {{1}}=customer, {{2}}=quote#, {{3}}=total" />
+          }} options={tplNames} disabled={!canEdit} placeholder="hre_quote_pdf" hint="Document-header template. Body vars: {{1}}=customer, {{2}}=quote#, {{3}}=total line, {{4}}=validity/items" />
           <TemplateField label="Quote Template Language" testId="wa-quote-template-lang" value={form.quote_template_language} onChange={(v) => setForm({ ...form, quote_template_language: v })} options={quoteLangs} disabled={!canEdit} placeholder="en or en_us" />
 
           <div className="sm:col-span-2 flex justify-end pt-2">
@@ -230,7 +230,11 @@ function WhatsAppTab({ canEdit }) {
           )}
           <div className="border-t border-zinc-100 pt-3 mt-3 text-[11px] text-zinc-500 leading-relaxed">
             <div className="font-bold uppercase tracking-wider text-[9px] text-zinc-700 mb-1">Quote PDF Template</div>
-            For automated quote dispatch, your <span className="font-bold">Quote Dispatch Template</span> must have a <span className="font-bold">Document</span> header (PDF) and 3 body variables: <span className="font-mono bg-zinc-100 px-1">{`{{1}}`}</span>=customer, <span className="font-mono bg-zinc-100 px-1">{`{{2}}`}</span>=quote#, <span className="font-mono bg-zinc-100 px-1">{`{{3}}`}</span>=grand total.
+            Your <span className="font-bold">Quote Dispatch Template</span> needs a <span className="font-bold">Document</span> header (PDF) plus 4 body variables:<br/>
+            <span className="font-mono bg-zinc-100 px-1">{`{{1}}`}</span> = customer name<br/>
+            <span className="font-mono bg-zinc-100 px-1">{`{{2}}`}</span> = quote number (e.g. HRE/QT/2026-27/0011)<br/>
+            <span className="font-mono bg-zinc-100 px-1">{`{{3}}`}</span> = total line (e.g. "Total: ₹12,345.00")<br/>
+            <span className="font-mono bg-zinc-100 px-1">{`{{4}}`}</span> = validity / item count
           </div>
         </div>
       </div>
