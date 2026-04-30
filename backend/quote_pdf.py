@@ -164,7 +164,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
 <body><div class="quote">
 
   <div class="header">
-    <div class="center head-title underline">QUOTATION</div>
+    <div class="center head-title underline">{{ doc_title }}</div>
     <div class="top">
       <div class="l">{% if logo_url %}<img src="{{ logo_url }}" alt="HREXPORTER">{% else %}<div class="bold" style="font-size:22px;letter-spacing:2px;">HREXPORTER</div>{% endif %}</div>
       <div class="r">
@@ -333,8 +333,10 @@ def _inr_fmt(n: float) -> str:
     return f"{sign}{grouped}.{frac}"
 
 
-def render_quote_pdf(quote: Dict[str, Any], output_path: Path, logo_url: str | None = None) -> Path:
-    """Render the supplied quote dict to a PDF at output_path."""
+def render_quote_pdf(quote: Dict[str, Any], output_path: Path, logo_url: str | None = None, doc_title: str = "QUOTATION", meta_labels: Optional[Dict[str, str]] = None) -> Path:
+    """Render the supplied quote/PI/invoice dict to a PDF at output_path.
+    `doc_title` is shown in the header (e.g. "QUOTATION", "PROFORMA INVOICE").
+    `meta_labels` overrides the Quot.No/Quot.Date labels (e.g. PI No/PI Date)."""
     env = Environment(loader=BaseLoader(), autoescape=select_autoescape(["html", "xml"]))
     env.globals["inr_fmt"] = _inr_fmt
     tpl = env.from_string(_TEMPLATE)
@@ -363,6 +365,7 @@ def render_quote_pdf(quote: Dict[str, Any], output_path: Path, logo_url: str | N
         valid_until_date=_format_date_dmy(quote.get("valid_until") or ""),
         short_quote_no=short_quote_no,
         logo_url=logo_url,
+        doc_title=doc_title,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

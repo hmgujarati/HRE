@@ -8,6 +8,7 @@ import { useAuth } from "@/contexts/AuthContext";
 const items = [
   { to: "/dashboard", label: "Dashboard", icon: ChartBar },
   { to: "/quotations", label: "Quotations", icon: FileText },
+  { to: "/orders", label: "Orders", icon: Storefront },
   { to: "/contacts", label: "Contacts", icon: AddressBook },
   { to: "/pricing-chart", label: "Pricing Chart", icon: Tag },
   { to: "/product-families", label: "Product Families", icon: Stack },
@@ -19,7 +20,6 @@ const items = [
 
 const soon = [
   { label: "WhatsApp Bot", icon: ChatCircleDots },
-  { label: "Order Tracking", icon: Storefront },
   { label: "Expo Leads", icon: Storefront },
 ];
 

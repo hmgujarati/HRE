@@ -15,6 +15,18 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - **Manager** — view + edit product/pricing data, image uploads, bulk discount
 - **Employee** — read-only on catalogue/pricing
 
+## Phase 2C — Order Tracking (implemented 2026-04-30)
+- New `orders` collection with full lifecycle: pending_po → po_received → proforma_issued → order_placed → raw_material_check (branch: procuring) → in_production → packaging → dispatched → lr_received → delivered
+- Convert any approved/sent quote into an order — snapshots line items, contact, totals, place_of_supply
+- Auto-numbered: orders `HRE/ORD/2026-27/NNNN`, proforma `HRE/PI/2026-27/NNNN`
+- Server-side **Proforma Invoice PDF** generator (reuses quote_pdf.py with `doc_title="PROFORMA INVOICE"` + 50% advance terms)
+- Document uploads (PO, PI, Invoice, E-way Bill, LR copy) saved under `/uploads/orders/{oid}/` with timestamped filenames
+- **Free-form production updates** appended chronologically to a per-order log
+- **Auto WhatsApp notifications** at every milestone (PI Issued, In Production, Packaging, Dispatched, LR Received) — settings tab now has 5 dedicated template selectors
+- **Full audit trail** (timeline) of every event with timestamps + user
+- Frontend: `/orders` table list with stage filter + search; `/orders/:id` detail page with contact card, contextual stage actions, production note input, document sidebar, notification log, full timeline
+- "Convert to Order" button on QuotationView (visible when status=approved/sent)
+
 ## Real-time Delivery Webhooks + Email Read Tracking — implemented (2026-04-30)
 - BizChat webhook receiver at `POST /api/webhooks/bizchat/status?secret=...` parses 7 payload shapes (flat, `{data}`, `{statuses[]}`, Meta envelope, BizChat native `{message:{whatsapp_message_id, status}}`, nested `whatsapp_webhook_payload`, wrapped `payload`). Auto-generated webhook secret surfaced in Settings UI with Copy + Rotate buttons. GET health-check for BizChat's "Verify Webhook" step.
 - Status-rank guard on both webhook + polled updates so late-arriving `delivered` never overwrites `read`

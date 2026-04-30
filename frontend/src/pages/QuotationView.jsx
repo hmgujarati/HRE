@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
-import { ArrowLeft, PencilSimple, Printer, ArrowsClockwise, Check, X, PaperPlaneTilt, WhatsappLogo, Envelope } from "@phosphor-icons/react";
+import { ArrowLeft, PencilSimple, Printer, ArrowsClockwise, Check, X, PaperPlaneTilt, WhatsappLogo, Envelope, Storefront } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import QuoteStatusBadge from "@/components/QuoteStatusBadge";
 import { DeliveryPill, latestByChannel } from "@/components/DeliveryPill";
@@ -126,6 +126,17 @@ export default function QuotationView() {
     }
   };
 
+  const convertToOrder = async () => {
+    const po = window.prompt("Buyer's Purchase Order number? (optional — you can upload the PO later)") ?? "";
+    try {
+      const r = await api.post(`/quotations/${id}/convert-to-order`, { po_number: po });
+      toast.success(`Order ${r.data.order_number} created`);
+      navigate(`/orders/${r.data.id}`);
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail));
+    }
+  };
+
   if (!quote) return <div className="p-8 text-zinc-400">Loading…</div>;
 
   const canEdit = !["approved", "rejected"].includes(quote.status);
@@ -195,6 +206,11 @@ export default function QuotationView() {
                 <X size={14} weight="bold" /> Mark Rejected
               </button>
             </>
+          )}
+          {(quote.status === "approved" || quote.status === "sent") && (
+            <button onClick={convertToOrder} className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-4 py-2 flex items-center gap-2" data-testid="quote-convert-order-btn">
+              <Storefront size={14} weight="fill" /> Convert to Order
+            </button>
           )}
         </div>
       </div>

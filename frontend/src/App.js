@@ -20,6 +20,8 @@ import ContactDetail from "@/pages/ContactDetail";
 import Quotations from "@/pages/Quotations";
 import QuotationBuilder from "@/pages/QuotationBuilder";
 import QuotationView from "@/pages/QuotationView";
+import Orders from "@/pages/Orders";
+import OrderView from "@/pages/OrderView";
 import PublicCatalogue from "@/pages/public/PublicCatalogue";
 import PublicFamilyDetail from "@/pages/public/PublicFamilyDetail";
 import RequestQuote from "@/pages/public/RequestQuote";
@@ -47,6 +49,8 @@ function App() {
             <Route path="/quotations/new" element={<QuotationBuilder />} />
             <Route path="/quotations/:id" element={<QuotationView />} />
             <Route path="/quotations/:id/edit" element={<QuotationBuilder />} />
+            <Route path="/orders" element={<Orders />} />
+            <Route path="/orders/:id" element={<OrderView />} />
             <Route path="/contacts" element={<Contacts />} />
             <Route path="/contacts/:id" element={<ContactDetail />} />
             <Route path="/pricing-chart" element={<PricingChart />} />

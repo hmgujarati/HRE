@@ -187,6 +187,18 @@ function WhatsAppTab({ canEdit }) {
           }} options={tplNames} disabled={!canEdit} placeholder="hre_quote_pdf" hint="Document-header template. Body vars: {{1}}=customer, {{2}}=quote#, {{3}}=total line, {{4}}=validity/items" />
           <TemplateField label="Quote Template Language" testId="wa-quote-template-lang" value={form.quote_template_language} onChange={(v) => setForm({ ...form, quote_template_language: v })} options={quoteLangs} disabled={!canEdit} placeholder="en or en_us" />
 
+          <div className="sm:col-span-2 border-t border-zinc-200 mt-2 pt-4">
+            <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Order Tracking Auto-Notify</div>
+            <div className="text-xs text-zinc-500 mb-2">
+              These templates fire automatically when an order moves through stages. Each template should accept body vars: <span className="font-mono">{`{{1}}`}</span>=customer, <span className="font-mono">{`{{2}}`}</span>=order#, <span className="font-mono">{`{{3}}`}</span>=stage, <span className="font-mono">{`{{4}}`}</span>=timestamp. Document header optional (auto-attached for PI / Dispatch / LR).
+            </div>
+          </div>
+          <TemplateField label="Proforma Issued Template" testId="wa-pi-template" value={form.order_pi_template} onChange={(v) => setForm({ ...form, order_pi_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+          <TemplateField label="In Production Template" testId="wa-prod-template" value={form.order_production_template} onChange={(v) => setForm({ ...form, order_production_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+          <TemplateField label="Packaging Template" testId="wa-packaging-template" value={form.order_packaging_template} onChange={(v) => setForm({ ...form, order_packaging_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+          <TemplateField label="Dispatched Template" testId="wa-dispatched-template" value={form.order_dispatched_template} onChange={(v) => setForm({ ...form, order_dispatched_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+          <TemplateField label="LR Received Template" testId="wa-lr-template" value={form.order_lr_template} onChange={(v) => setForm({ ...form, order_lr_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+
           <div className="sm:col-span-2 flex justify-end pt-2">
             <button type="submit" disabled={busy || !canEdit} data-testid="wa-save-btn" className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-5 py-3 flex items-center gap-2 disabled:opacity-60">
               <FloppyDisk size={14} weight="bold" /> {busy ? "Saving…" : "Save WhatsApp Settings"}
