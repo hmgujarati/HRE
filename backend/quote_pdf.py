@@ -101,7 +101,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   @page { size: A4; margin: 10mm; }
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; color: #000; font-size: 11px; margin: 0; }
-  .quote { width: 100%; }
+  .quote { width: 100%; border: 1.5px solid #000; }
   .center { text-align: center; }
   .right { text-align: right; }
   .bold { font-weight: 700; }
@@ -152,7 +152,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .bank .l { width: 58%; border-right: 1px solid #000; }
   .bank .r { width: 42%; min-height: 80px; }
 
-  .terms { display: table; width: 100%; border-top: 1px solid #000; }
+  .terms { display: table; width: 100%; border-top: 1px solid #000; border-bottom: 1.5px solid #000; }
   .terms .l { display: table-cell; width: 58%; padding: 12px; border-right: 1px solid #000; min-height: 120px; vertical-align: top; }
   .terms .r { display: table-cell; width: 42%; padding: 12px; vertical-align: top; text-align: right; }
   .sig { margin-top: 60px; text-align: right; }
