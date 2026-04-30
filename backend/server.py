@@ -1299,11 +1299,267 @@ async def quote_stats(_: dict = Depends(get_current_user)):
 # ---------- Public Catalogue + Self-Serve Quote (Wave A) ----------
 import secrets
 import hashlib
+import httpx
 
 OTP_TTL_SECONDS = 10 * 60
 OTP_MAX_ATTEMPTS = 5
 SESSION_TTL_DAYS = 30
 DEV_OTP_PASSTHROUGH = os.environ.get("DEV_OTP_PASSTHROUGH", "true").lower() == "true"
+SETTINGS_DOC_ID = "integrations"
+
+
+# ---------- Integration Settings (WhatsApp BizChatAPI + SMTP) ----------
+DEFAULT_INTEGRATIONS = {
+    "id": SETTINGS_DOC_ID,
+    "whatsapp": {
+        "enabled": False,
+        "api_base_url": "https://bizchatapi.in/api",
+        "vendor_uid": "",
+        "token": "",
+        "from_phone_number_id": "",
+        "otp_template_name": "",
+        "otp_template_language": "en",
+        "default_country_code": "91",
+    },
+    "smtp": {
+        "enabled": False,
+        "host": "smtp.hostinger.com",
+        "port": 465,
+        "use_ssl": True,
+        "username": "",
+        "password": "",
+        "from_email": "",
+        "from_name": "HRE Exporter",
+    },
+}
+
+
+async def _get_integrations() -> dict:
+    doc = await db.settings.find_one({"id": SETTINGS_DOC_ID}, {"_id": 0})
+    if not doc:
+        return DEFAULT_INTEGRATIONS.copy()
+    # Merge with defaults to surface new keys after upgrades
+    out = {**DEFAULT_INTEGRATIONS, **doc}
+    out["whatsapp"] = {**DEFAULT_INTEGRATIONS["whatsapp"], **(doc.get("whatsapp") or {})}
+    out["smtp"] = {**DEFAULT_INTEGRATIONS["smtp"], **(doc.get("smtp") or {})}
+    return out
+
+
+def _mask_secret(val: Optional[str]) -> str:
+    if not val:
+        return ""
+    s = str(val)
+    if len(s) <= 6:
+        return "•" * len(s)
+    return s[:3] + "•" * max(4, len(s) - 6) + s[-3:]
+
+
+def _public_integrations(d: dict) -> dict:
+    out = {**d}
+    out["whatsapp"] = {**d["whatsapp"], "token": _mask_secret(d["whatsapp"].get("token"))}
+    out["smtp"] = {**d["smtp"], "password": _mask_secret(d["smtp"].get("password"))}
+    return out
+
+
+def _normalise_phone(phone: str, default_cc: str = "91") -> str:
+    """Strip non-digits; if 10 digits, prepend default country code."""
+    digits = re.sub(r"\D", "", phone or "")
+    if not digits:
+        return ""
+    if len(digits) == 10:
+        digits = (default_cc or "91") + digits
+    if digits.startswith("0"):
+        digits = digits.lstrip("0")
+        if len(digits) == 10:
+            digits = (default_cc or "91") + digits
+    return digits
+
+
+async def _send_whatsapp_template(
+    wa: dict,
+    phone: str,
+    template_name: str,
+    template_language: str,
+    field_1: Optional[str] = None,
+    button_0: Optional[str] = None,
+    extra: Optional[dict] = None,
+) -> dict:
+    """Send a WhatsApp template via BizChatAPI. Raises HTTPException on failure."""
+    if not (wa.get("enabled") and wa.get("vendor_uid") and wa.get("token") and template_name):
+        raise HTTPException(status_code=503, detail="WhatsApp integration is not configured")
+    url = f"{wa['api_base_url'].rstrip('/')}/{wa['vendor_uid']}/contact/send-template-message"
+    payload: Dict[str, Any] = {
+        "from_phone_number_id": wa.get("from_phone_number_id") or "",
+        "phone_number": _normalise_phone(phone, wa.get("default_country_code") or "91"),
+        "template_name": template_name,
+        "template_language": template_language or "en",
+    }
+    if field_1 is not None:
+        payload["field_1"] = str(field_1)
+    if button_0 is not None:
+        payload["button_0"] = str(button_0)
+    if extra:
+        payload.update(extra)
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(url, params={"token": wa["token"]}, json=payload)
+        body: Any
+        try:
+            body = r.json()
+        except Exception:
+            body = r.text
+        if r.status_code >= 400:
+            logger.error(f"[WA] template send failed status={r.status_code} body={body}")
+            detail = body.get("message") if isinstance(body, dict) else str(body)
+            raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {detail}")
+        logger.info(f"[WA] template={template_name} → {payload['phone_number']} ok")
+        return body if isinstance(body, dict) else {"raw": body}
+    except httpx.HTTPError as e:
+        logger.exception("[WA] HTTP error")
+        raise HTTPException(status_code=502, detail=f"WhatsApp HTTP error: {e}")
+
+
+async def _send_whatsapp_text(wa: dict, phone: str, message: str) -> dict:
+    if not (wa.get("enabled") and wa.get("vendor_uid") and wa.get("token")):
+        raise HTTPException(status_code=503, detail="WhatsApp integration is not configured")
+    url = f"{wa['api_base_url'].rstrip('/')}/{wa['vendor_uid']}/contact/send-message"
+    payload = {
+        "from_phone_number_id": wa.get("from_phone_number_id") or "",
+        "phone_number": _normalise_phone(phone, wa.get("default_country_code") or "91"),
+        "message_body": message,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(url, params={"token": wa["token"]}, json=payload)
+        body = r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text
+        if r.status_code >= 400:
+            detail = body.get("message") if isinstance(body, dict) else str(body)
+            raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {detail}")
+        return body if isinstance(body, dict) else {"raw": body}
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"WhatsApp HTTP error: {e}")
+
+
+class WhatsAppSettingsIn(BaseModel):
+    enabled: bool = False
+    api_base_url: str = "https://bizchatapi.in/api"
+    vendor_uid: str = ""
+    token: Optional[str] = None  # null = keep existing
+    from_phone_number_id: str = ""
+    otp_template_name: str = ""
+    otp_template_language: str = "en"
+    default_country_code: str = "91"
+
+
+class SmtpSettingsIn(BaseModel):
+    enabled: bool = False
+    host: str = "smtp.hostinger.com"
+    port: int = 465
+    use_ssl: bool = True
+    username: str = ""
+    password: Optional[str] = None  # null = keep existing
+    from_email: str = ""
+    from_name: str = "HRE Exporter"
+
+
+class IntegrationsIn(BaseModel):
+    whatsapp: Optional[WhatsAppSettingsIn] = None
+    smtp: Optional[SmtpSettingsIn] = None
+
+
+@api.get("/settings/integrations")
+async def get_integrations(_: dict = Depends(require_role("admin", "manager"))):
+    cur = await _get_integrations()
+    return _public_integrations(cur)
+
+
+@api.put("/settings/integrations")
+async def update_integrations(data: IntegrationsIn, _: dict = Depends(require_role("admin"))):
+    cur = await _get_integrations()
+    if data.whatsapp is not None:
+        wa_in = data.whatsapp.model_dump()
+        if wa_in.get("token") in (None, ""):
+            wa_in["token"] = cur["whatsapp"].get("token", "")
+        cur["whatsapp"] = {**cur["whatsapp"], **wa_in}
+    if data.smtp is not None:
+        sm_in = data.smtp.model_dump()
+        if sm_in.get("password") in (None, ""):
+            sm_in["password"] = cur["smtp"].get("password", "")
+        cur["smtp"] = {**cur["smtp"], **sm_in}
+    cur["id"] = SETTINGS_DOC_ID
+    cur["updated_at"] = now_iso()
+    await db.settings.update_one(
+        {"id": SETTINGS_DOC_ID},
+        {"$set": cur},
+        upsert=True,
+    )
+    refreshed = await _get_integrations()
+    return _public_integrations(refreshed)
+
+
+class WhatsAppTestIn(BaseModel):
+    phone: str
+    mode: str = "template"  # "template" | "text"
+    message: Optional[str] = None  # for text mode
+    sample_otp: Optional[str] = "123456"  # for template mode
+
+
+@api.post("/settings/whatsapp/test")
+async def test_whatsapp_send(data: WhatsAppTestIn, _: dict = Depends(require_role("admin", "manager"))):
+    cur = await _get_integrations()
+    wa = cur["whatsapp"]
+    if not (wa.get("enabled") and wa.get("vendor_uid") and wa.get("token")):
+        raise HTTPException(status_code=400, detail="Save & enable WhatsApp settings first")
+    if data.mode == "text":
+        if not data.message:
+            raise HTTPException(status_code=400, detail="Message required for text mode")
+        body = await _send_whatsapp_text(wa, data.phone, data.message)
+        return {"ok": True, "mode": "text", "response": body}
+    if not wa.get("otp_template_name"):
+        raise HTTPException(status_code=400, detail="OTP template name not set")
+    body = await _send_whatsapp_template(
+        wa, data.phone,
+        template_name=wa["otp_template_name"],
+        template_language=wa.get("otp_template_language") or "en",
+        field_1=data.sample_otp or "123456",
+        button_0=data.sample_otp or "123456",
+    )
+    return {"ok": True, "mode": "template", "response": body}
+
+
+class SmtpTestIn(BaseModel):
+    to_email: EmailStr
+    subject: str = "HRE Exporter SMTP test"
+    body: str = "If you can read this, your Hostinger SMTP credentials are wired correctly."
+
+
+@api.post("/settings/smtp/test")
+async def test_smtp_send(data: SmtpTestIn, _: dict = Depends(require_role("admin", "manager"))):
+    cur = await _get_integrations()
+    sm = cur["smtp"]
+    if not (sm.get("enabled") and sm.get("host") and sm.get("username") and sm.get("password") and sm.get("from_email")):
+        raise HTTPException(status_code=400, detail="Save & enable SMTP settings first")
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.utils import formataddr
+        msg = MIMEText(data.body, "plain", "utf-8")
+        msg["Subject"] = data.subject
+        msg["From"] = formataddr((sm.get("from_name") or "HRE Exporter", sm["from_email"]))
+        msg["To"] = data.to_email
+        if sm.get("use_ssl") or int(sm.get("port", 465)) == 465:
+            with smtplib.SMTP_SSL(sm["host"], int(sm.get("port", 465)), timeout=20) as server:
+                server.login(sm["username"], sm["password"])
+                server.sendmail(sm["from_email"], [data.to_email], msg.as_string())
+        else:
+            with smtplib.SMTP(sm["host"], int(sm.get("port", 587)), timeout=20) as server:
+                server.starttls()
+                server.login(sm["username"], sm["password"])
+                server.sendmail(sm["from_email"], [data.to_email], msg.as_string())
+        return {"ok": True}
+    except Exception as e:
+        logger.exception("[SMTP] test failed")
+        raise HTTPException(status_code=502, detail=f"SMTP send failed: {e}")
 
 
 def _hash_otp(code: str) -> str:
@@ -1391,10 +1647,33 @@ async def public_qr_send_otp(rid: str):
             "otp_attempts": 0,
         }},
     )
-    # Wave A: log only. Wave B: replace with WhatsApp template send.
-    logger.info(f"[OTP] phone={qr['phone']} code={code} (request_id={rid})")
-    resp = {"ok": True, "expires_in": OTP_TTL_SECONDS}
-    if DEV_OTP_PASSTHROUGH:
+    cur = await _get_integrations()
+    wa = cur["whatsapp"]
+    delivery = "dev"
+    delivery_error: Optional[str] = None
+    if wa.get("enabled") and wa.get("vendor_uid") and wa.get("token") and wa.get("otp_template_name"):
+        try:
+            await _send_whatsapp_template(
+                wa,
+                qr["phone"],
+                template_name=wa["otp_template_name"],
+                template_language=wa.get("otp_template_language") or "en",
+                field_1=code,
+                button_0=code,  # for COPY_CODE / URL button OTP templates
+            )
+            delivery = "whatsapp"
+        except HTTPException as e:
+            delivery_error = str(e.detail)
+            logger.error(f"[OTP] WhatsApp send failed for {rid}: {delivery_error}")
+        except Exception as e:
+            delivery_error = str(e)
+            logger.exception(f"[OTP] unexpected WhatsApp error for {rid}")
+
+    logger.info(f"[OTP] phone={qr['phone']} code={code} delivery={delivery} (request_id={rid})")
+    resp: Dict[str, Any] = {"ok": True, "expires_in": OTP_TTL_SECONDS, "delivery": delivery}
+    if delivery_error:
+        resp["delivery_error"] = delivery_error
+    if DEV_OTP_PASSTHROUGH and delivery != "whatsapp":
         resp["dev_otp"] = code
     return resp
 

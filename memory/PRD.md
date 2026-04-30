@@ -15,7 +15,15 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - **Manager** — view + edit product/pricing data, image uploads, bulk discount
 - **Employee** — read-only on catalogue/pricing
 
-## Public Portal Wave A — implemented (2026-05-XX, latest)
+## WhatsApp + SMTP Settings Module — implemented (2026-04-30)
+- New collection `settings` (singleton doc `id: "integrations"`) holds WhatsApp (BizChatAPI) and SMTP (Hostinger) configuration
+- Endpoints (admin/manager): `GET /api/settings/integrations`, `PUT /api/settings/integrations`, `POST /api/settings/whatsapp/test`, `POST /api/settings/smtp/test`
+- Secrets are **masked on read** (`tes•••890` style) and **preserved on update** when the field is sent empty/null
+- New Settings UI is **tabbed** (`WhatsApp`, `Email (SMTP)`, `Account`, `Branding`); admin can fill Vendor UID, token, OTP template name, language, default country code, from-phone-number-id; "Send Test" panels for both
+- `POST /api/public/quote-requests/{rid}/send-otp` now reads DB settings → if WhatsApp is `enabled` + token + template → calls BizChatAPI `send-template-message` (passes OTP as `field_1` and `button_0` for COPY_CODE templates); else dev fallback (logs + returns `dev_otp`). Response `delivery: "whatsapp"|"dev"` for client telemetry.
+- BizChatAPI integration: `httpx.AsyncClient` POST to `{base}/{vendor_uid}/contact/send-template-message?token=...` with phone normalised to `{country_code}{10-digits}`
+
+## Public Portal Wave A — implemented (2026-04-29)
 - `/catalogue` public page (hero + materials filter chips + grid) — fully mobile responsive (chip row scrolls, hero scales, build-quote CTA stacks)
 - `/catalogue/:id` Family Detail with **Smart Variant Finder**:
   - Cable size + Hole size inputs; numeric/range parser handles `"4-6 mm²"`, `"1.5"`, `"5 mm"` etc.

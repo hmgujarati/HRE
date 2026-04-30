@@ -1,35 +1,409 @@
+import { useEffect, useState } from "react";
 import PageHeader from "@/components/PageHeader";
 import { useAuth } from "@/contexts/AuthContext";
+import api, { formatApiError } from "@/lib/api";
+import { toast } from "sonner";
+import { WhatsappLogo, Envelope, User, Palette, CheckCircle, Warning, PaperPlaneRight, FloppyDisk } from "@phosphor-icons/react";
+
+const TABS = [
+  { id: "whatsapp", label: "WhatsApp", icon: WhatsappLogo },
+  { id: "smtp", label: "Email (SMTP)", icon: Envelope },
+  { id: "account", label: "Account", icon: User },
+  { id: "branding", label: "Branding", icon: Palette },
+];
 
 export default function Settings() {
   const { user } = useAuth();
+  const [tab, setTab] = useState("whatsapp");
+  const isAdmin = user?.role === "admin";
+
   return (
     <div className="animate-fade-in">
-      <PageHeader eyebrow="System" title="Settings" subtitle="Account & branding preferences." testId="settings-header" />
-      <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="border border-zinc-200 bg-white p-6">
-          <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">Account</div>
-          <h3 className="font-heading font-black text-lg mb-4">Signed in as</h3>
-          <div className="space-y-2 text-sm">
-            <div><span className="text-zinc-500 mr-2">Name:</span><span className="font-medium">{user?.name}</span></div>
-            <div><span className="text-zinc-500 mr-2">Email:</span><span className="font-mono">{user?.email}</span></div>
-            <div><span className="text-zinc-500 mr-2">Role:</span><span className="text-[10px] uppercase tracking-wider font-bold bg-[#FBAE17] text-black px-2 py-0.5">{user?.role}</span></div>
-          </div>
+      <PageHeader eyebrow="System" title="Settings" subtitle="Integrations, account & branding." testId="settings-header" />
+
+      <div className="px-4 sm:px-8 pt-2">
+        <div className="border-b border-zinc-200 flex gap-1 overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0">
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                data-testid={`settings-tab-${t.id}`}
+                className={`shrink-0 flex items-center gap-2 px-4 py-3 text-xs uppercase tracking-wider font-bold border-b-2 transition-colors ${active ? "border-[#FBAE17] text-[#1A1A1A]" : "border-transparent text-zinc-500 hover:text-[#1A1A1A]"}`}
+              >
+                <Icon size={14} weight={active ? "fill" : "regular"} />
+                {t.label}
+              </button>
+            );
+          })}
         </div>
-        <div className="border border-zinc-200 bg-white p-6">
-          <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">Branding</div>
-          <h3 className="font-heading font-black text-lg mb-4">HREXPORTER</h3>
-          <div className="border border-zinc-200 bg-zinc-50 p-4 mb-4 flex items-center justify-center">
-            <img src="/hre-logo-light-bg.png" alt="HREXPORTER" className="h-20 object-contain" />
+      </div>
+
+      <div className="p-4 sm:p-8">
+        {tab === "whatsapp" && <WhatsAppTab canEdit={isAdmin} />}
+        {tab === "smtp" && <SmtpTab canEdit={isAdmin} />}
+        {tab === "account" && <AccountTab user={user} />}
+        {tab === "branding" && <BrandingTab />}
+      </div>
+    </div>
+  );
+}
+
+// ---------------- WhatsApp Tab ----------------
+function WhatsAppTab({ canEdit }) {
+  const [data, setData] = useState(null);
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [testPhone, setTestPhone] = useState("");
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    try {
+      const { data } = await api.get("/settings/integrations");
+      setData(data);
+      setForm({ ...data.whatsapp, token: "" });
+    } catch (err) {
+      toast.error(formatApiError(err?.response?.data?.detail));
+    }
+  };
+
+  const save = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const payload = { whatsapp: { ...form } };
+      if (form.token === "" || form.token === null) delete payload.whatsapp.token;
+      const { data } = await api.put("/settings/integrations", payload);
+      setData(data);
+      setForm({ ...data.whatsapp, token: "" });
+      toast.success("WhatsApp settings saved");
+    } catch (err) {
+      toast.error(formatApiError(err?.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+  const sendTest = async () => {
+    if (!testPhone) { toast.error("Enter a phone number"); return; }
+    setTestBusy(true); setTestResult(null);
+    try {
+      const { data } = await api.post("/settings/whatsapp/test", { phone: testPhone, mode: "template" });
+      setTestResult({ ok: true, response: data });
+      toast.success("Test OTP template sent");
+    } catch (err) {
+      const msg = formatApiError(err?.response?.data?.detail);
+      setTestResult({ ok: false, error: msg });
+      toast.error(msg);
+    } finally { setTestBusy(false); }
+  };
+
+  if (!data || !form) return <div className="text-zinc-400 text-sm">Loading…</div>;
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2 border border-zinc-200 bg-white">
+        <div className="px-5 sm:px-6 py-4 border-b border-zinc-200 flex items-center gap-2">
+          <WhatsappLogo size={20} weight="fill" className="text-[#25D366]" />
+          <div>
+            <h3 className="font-heading font-black text-lg">BizChatAPI Configuration</h3>
+            <div className="text-xs text-zinc-500">Used for OTP delivery on the public quote portal and customer notifications.</div>
           </div>
-          <div className="grid grid-cols-3 gap-3 text-xs">
-            <div><div className="h-12 bg-[#FBAE17]" /><div className="font-mono mt-1">#FBAE17</div></div>
-            <div><div className="h-12 bg-[#1A1A1A]" /><div className="font-mono mt-1">#1A1A1A</div></div>
-            <div><div className="h-12 bg-white border border-zinc-300" /><div className="font-mono mt-1">#FFFFFF</div></div>
+          <StatusPill enabled={data.whatsapp.enabled && data.whatsapp.vendor_uid && data.whatsapp.token} />
+        </div>
+        <form onSubmit={save} className="p-5 sm:p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="sm:col-span-2 flex items-center justify-between border border-zinc-200 px-4 py-3 bg-zinc-50">
+            <div>
+              <div className="text-xs uppercase tracking-wider font-bold">Enable WhatsApp Send</div>
+              <div className="text-[11px] text-zinc-500">When off, OTPs fall back to dev mode (logged + returned in API).</div>
+            </div>
+            <Toggle checked={form.enabled} onChange={(v) => setForm({ ...form, enabled: v })} disabled={!canEdit} testId="wa-enabled" />
           </div>
-          <p className="text-xs text-zinc-500 mt-4">Logo upload and currency selector will be enabled in a later phase. Currency is currently set to <span className="font-bold">INR ₹</span>.</p>
+
+          <Field label="API Base URL" value={form.api_base_url} onChange={(v) => setForm({ ...form, api_base_url: v })} disabled={!canEdit} testId="wa-base-url" placeholder="https://bizchatapi.in/api" />
+          <Field label="Vendor UID" mono value={form.vendor_uid} onChange={(v) => setForm({ ...form, vendor_uid: v })} disabled={!canEdit} testId="wa-vendor-uid" placeholder="5a1795ja-b76h-..." />
+          <Field
+            label="API Token"
+            mono
+            type="password"
+            placeholder={data.whatsapp.token ? `Saved (${data.whatsapp.token}) — type to replace` : "xmg5n1nIL..."}
+            value={form.token || ""}
+            onChange={(v) => setForm({ ...form, token: v })}
+            disabled={!canEdit}
+            testId="wa-token"
+            span
+          />
+          <Field label="From Phone Number ID (optional)" value={form.from_phone_number_id} onChange={(v) => setForm({ ...form, from_phone_number_id: v })} disabled={!canEdit} testId="wa-phone-id" placeholder="leave blank for default" />
+          <Field label="Default Country Code" value={form.default_country_code} onChange={(v) => setForm({ ...form, default_country_code: v })} disabled={!canEdit} testId="wa-cc" placeholder="91" />
+          <Field label="OTP Template Name" value={form.otp_template_name} onChange={(v) => setForm({ ...form, otp_template_name: v })} disabled={!canEdit} testId="wa-template-name" placeholder="hre_otp_en" hint="Pre-approved Authentication template in Meta Business" />
+          <Field label="Template Language" value={form.otp_template_language} onChange={(v) => setForm({ ...form, otp_template_language: v })} disabled={!canEdit} testId="wa-template-lang" placeholder="en or en_US" />
+
+          <div className="sm:col-span-2 flex justify-end pt-2">
+            <button type="submit" disabled={busy || !canEdit} data-testid="wa-save-btn" className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-5 py-3 flex items-center gap-2 disabled:opacity-60">
+              <FloppyDisk size={14} weight="bold" /> {busy ? "Saving…" : "Save WhatsApp Settings"}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="border border-zinc-200 bg-white h-fit">
+        <div className="px-5 py-4 border-b border-zinc-200">
+          <h3 className="font-heading font-black text-base">Send Test OTP</h3>
+          <div className="text-xs text-zinc-500">Sends a sample OTP <span className="font-mono">123456</span> via your configured template.</div>
+        </div>
+        <div className="p-5 space-y-3">
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-700 mb-1 block">Phone (with country code)</label>
+            <input
+              type="tel"
+              value={testPhone}
+              onChange={(e) => setTestPhone(e.target.value)}
+              placeholder="918856066529"
+              className="w-full border border-zinc-300 px-3 py-2 text-sm font-mono focus:outline-none focus:border-[#FBAE17]"
+              data-testid="wa-test-phone"
+            />
+          </div>
+          <button
+            onClick={sendTest}
+            disabled={testBusy}
+            data-testid="wa-test-send"
+            className="w-full bg-[#1A1A1A] hover:bg-black text-white font-bold uppercase tracking-wider text-xs py-3 flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            <PaperPlaneRight size={14} weight="bold" /> {testBusy ? "Sending…" : "Send Test"}
+          </button>
+          {testResult && (
+            <div className={`border px-3 py-2 text-xs ${testResult.ok ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-red-300 bg-red-50 text-red-900"}`}>
+              <div className="font-bold flex items-center gap-1 mb-1">
+                {testResult.ok ? <><CheckCircle size={14} weight="fill" /> Sent</> : <><Warning size={14} weight="fill" /> Failed</>}
+              </div>
+              <pre className="font-mono text-[10px] whitespace-pre-wrap break-all">{JSON.stringify(testResult.ok ? testResult.response : testResult.error, null, 2)}</pre>
+            </div>
+          )}
+          <div className="border-t border-zinc-100 pt-3 mt-3 text-[11px] text-zinc-500 leading-relaxed">
+            <div className="font-bold uppercase tracking-wider text-[9px] text-zinc-700 mb-1">Notes</div>
+            • Your template body should include <span className="font-mono bg-zinc-100 px-1">{`{{1}}`}</span> for the OTP code.<br/>
+            • For COPY-CODE / URL button OTP templates, the same code is sent as <span className="font-mono">button_0</span>.<br/>
+            • Token is encrypted-at-rest only by your DB — restrict admin access accordingly.
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------------- SMTP Tab ----------------
+function SmtpTab({ canEdit }) {
+  const [data, setData] = useState(null);
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [testEmail, setTestEmail] = useState("");
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    try {
+      const { data } = await api.get("/settings/integrations");
+      setData(data);
+      setForm({ ...data.smtp, password: "" });
+    } catch (err) {
+      toast.error(formatApiError(err?.response?.data?.detail));
+    }
+  };
+
+  const save = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const payload = { smtp: { ...form } };
+      if (form.password === "" || form.password === null) delete payload.smtp.password;
+      const { data } = await api.put("/settings/integrations", payload);
+      setData(data);
+      setForm({ ...data.smtp, password: "" });
+      toast.success("SMTP settings saved");
+    } catch (err) {
+      toast.error(formatApiError(err?.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+  const sendTest = async () => {
+    if (!testEmail) { toast.error("Enter a recipient email"); return; }
+    setTestBusy(true); setTestResult(null);
+    try {
+      const { data } = await api.post("/settings/smtp/test", { to_email: testEmail });
+      setTestResult({ ok: true, response: data });
+      toast.success("Test email dispatched");
+    } catch (err) {
+      const msg = formatApiError(err?.response?.data?.detail);
+      setTestResult({ ok: false, error: msg });
+      toast.error(msg);
+    } finally { setTestBusy(false); }
+  };
+
+  if (!data || !form) return <div className="text-zinc-400 text-sm">Loading…</div>;
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2 border border-zinc-200 bg-white">
+        <div className="px-5 sm:px-6 py-4 border-b border-zinc-200 flex items-center gap-2">
+          <Envelope size={20} weight="fill" className="text-[#FBAE17]" />
+          <div>
+            <h3 className="font-heading font-black text-lg">Hostinger / SMTP Configuration</h3>
+            <div className="text-xs text-zinc-500">Used to email quote PDFs and notifications to customers.</div>
+          </div>
+          <StatusPill enabled={data.smtp.enabled && data.smtp.host && data.smtp.username} />
+        </div>
+        <form onSubmit={save} className="p-5 sm:p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="sm:col-span-2 flex items-center justify-between border border-zinc-200 px-4 py-3 bg-zinc-50">
+            <div>
+              <div className="text-xs uppercase tracking-wider font-bold">Enable Email Send</div>
+              <div className="text-[11px] text-zinc-500">When off, no SMTP is invoked.</div>
+            </div>
+            <Toggle checked={form.enabled} onChange={(v) => setForm({ ...form, enabled: v })} disabled={!canEdit} testId="smtp-enabled" />
+          </div>
+          <Field label="Host" value={form.host} onChange={(v) => setForm({ ...form, host: v })} disabled={!canEdit} testId="smtp-host" placeholder="smtp.hostinger.com" />
+          <Field label="Port" type="number" value={form.port} onChange={(v) => setForm({ ...form, port: Number(v) || 0 })} disabled={!canEdit} testId="smtp-port" placeholder="465" />
+          <div className="sm:col-span-2 flex items-center gap-2 text-xs">
+            <input id="smtp-ssl" type="checkbox" checked={form.use_ssl} onChange={(e) => setForm({ ...form, use_ssl: e.target.checked })} disabled={!canEdit} data-testid="smtp-ssl" />
+            <label htmlFor="smtp-ssl" className="font-bold uppercase tracking-wider">Use SSL (port 465). Uncheck for STARTTLS on port 587.</label>
+          </div>
+          <Field label="Username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} disabled={!canEdit} testId="smtp-username" placeholder="quotes@hrexporter.com" />
+          <Field
+            label="Password"
+            type="password"
+            placeholder={data.smtp.password ? `Saved (${data.smtp.password}) — type to replace` : "••••••••"}
+            value={form.password || ""}
+            onChange={(v) => setForm({ ...form, password: v })}
+            disabled={!canEdit}
+            testId="smtp-password"
+          />
+          <Field label="From Email" value={form.from_email} onChange={(v) => setForm({ ...form, from_email: v })} disabled={!canEdit} testId="smtp-from-email" placeholder="quotes@hrexporter.com" />
+          <Field label="From Name" value={form.from_name} onChange={(v) => setForm({ ...form, from_name: v })} disabled={!canEdit} testId="smtp-from-name" placeholder="HRE Exporter" />
+          <div className="sm:col-span-2 flex justify-end pt-2">
+            <button type="submit" disabled={busy || !canEdit} data-testid="smtp-save-btn" className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-5 py-3 flex items-center gap-2 disabled:opacity-60">
+              <FloppyDisk size={14} weight="bold" /> {busy ? "Saving…" : "Save SMTP Settings"}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="border border-zinc-200 bg-white h-fit">
+        <div className="px-5 py-4 border-b border-zinc-200">
+          <h3 className="font-heading font-black text-base">Send Test Email</h3>
+          <div className="text-xs text-zinc-500">Sends a plain-text email to verify SMTP creds.</div>
+        </div>
+        <div className="p-5 space-y-3">
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-700 mb-1 block">To Email</label>
+            <input
+              type="email"
+              value={testEmail}
+              onChange={(e) => setTestEmail(e.target.value)}
+              placeholder="you@example.com"
+              className="w-full border border-zinc-300 px-3 py-2 text-sm font-mono focus:outline-none focus:border-[#FBAE17]"
+              data-testid="smtp-test-email"
+            />
+          </div>
+          <button
+            onClick={sendTest}
+            disabled={testBusy}
+            data-testid="smtp-test-send"
+            className="w-full bg-[#1A1A1A] hover:bg-black text-white font-bold uppercase tracking-wider text-xs py-3 flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            <PaperPlaneRight size={14} weight="bold" /> {testBusy ? "Sending…" : "Send Test Email"}
+          </button>
+          {testResult && (
+            <div className={`border px-3 py-2 text-xs ${testResult.ok ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-red-300 bg-red-50 text-red-900"}`}>
+              <div className="font-bold flex items-center gap-1 mb-1">
+                {testResult.ok ? <><CheckCircle size={14} weight="fill" /> Sent</> : <><Warning size={14} weight="fill" /> Failed</>}
+              </div>
+              <pre className="font-mono text-[10px] whitespace-pre-wrap break-all">{JSON.stringify(testResult.ok ? testResult.response : testResult.error, null, 2)}</pre>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- Account & Branding tabs (kept) ----------------
+function AccountTab({ user }) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="border border-zinc-200 bg-white p-6">
+        <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">Account</div>
+        <h3 className="font-heading font-black text-lg mb-4">Signed in as</h3>
+        <div className="space-y-2 text-sm">
+          <div><span className="text-zinc-500 mr-2">Name:</span><span className="font-medium">{user?.name}</span></div>
+          <div><span className="text-zinc-500 mr-2">Email:</span><span className="font-mono">{user?.email}</span></div>
+          <div><span className="text-zinc-500 mr-2">Role:</span><span className="text-[10px] uppercase tracking-wider font-bold bg-[#FBAE17] text-black px-2 py-0.5">{user?.role}</span></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BrandingTab() {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="border border-zinc-200 bg-white p-6">
+        <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">Branding</div>
+        <h3 className="font-heading font-black text-lg mb-4">HREXPORTER</h3>
+        <div className="border border-zinc-200 bg-zinc-50 p-4 mb-4 flex items-center justify-center">
+          <img src="/hre-logo-light-bg.png" alt="HREXPORTER" className="h-20 object-contain" />
+        </div>
+        <div className="grid grid-cols-3 gap-3 text-xs">
+          <div><div className="h-12 bg-[#FBAE17]" /><div className="font-mono mt-1">#FBAE17</div></div>
+          <div><div className="h-12 bg-[#1A1A1A]" /><div className="font-mono mt-1">#1A1A1A</div></div>
+          <div><div className="h-12 bg-white border border-zinc-300" /><div className="font-mono mt-1">#FFFFFF</div></div>
+        </div>
+        <p className="text-xs text-zinc-500 mt-4">Logo upload and currency selector will be enabled in a later phase.</p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- Reusable bits ----------------
+function Field({ label, value, onChange, type = "text", placeholder, span, mono, disabled, testId, hint }) {
+  return (
+    <div className={span ? "sm:col-span-2" : ""}>
+      <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-700 mb-1 block">{label}</label>
+      <input
+        type={type}
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        disabled={disabled}
+        data-testid={testId}
+        className={`w-full border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:border-[#FBAE17] disabled:bg-zinc-50 disabled:text-zinc-500 ${mono ? "font-mono" : ""}`}
+      />
+      {hint && <div className="text-[10px] text-zinc-500 mt-1">{hint}</div>}
+    </div>
+  );
+}
+
+function Toggle({ checked, onChange, disabled, testId }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => !disabled && onChange(!checked)}
+      data-testid={testId}
+      disabled={disabled}
+      className={`relative w-11 h-6 transition-colors ${checked ? "bg-[#FBAE17]" : "bg-zinc-300"} ${disabled ? "opacity-50" : ""}`}
+    >
+      <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white transition-transform ${checked ? "translate-x-5" : ""}`} />
+    </button>
+  );
+}
+
+function StatusPill({ enabled }) {
+  return (
+    <span className={`ml-auto text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 ${enabled ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-500"}`}>
+      {enabled ? "Live" : "Inactive"}
+    </span>
   );
 }
