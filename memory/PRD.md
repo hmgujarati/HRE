@@ -16,7 +16,8 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - **Employee** — read-only on catalogue/pricing
 
 ## Quote PDF Dispatch (WhatsApp + Email) — implemented (2026-04-30)
-- New module `/app/backend/quote_pdf.py`: server-side PDF generator using **Jinja2 + WeasyPrint**, replicates the on-screen `QuotationView.jsx` layout (header, GSTIN/PAN, TO box, line items, CGST/SGST/IGST split, Indian-format totals, RUPEES words, bank + remark, terms + signature)
+- New module `/app/backend/quote_pdf.py`: server-side PDF generator using **Jinja2 + WeasyPrint**, replicates the on-screen `QuotationView.jsx` layout with full outer frame (top/right/bottom/left borders all enclosed)
+- Each dispatch writes a **timestamped** PDF (`{quote_no}_{YYYYMMDDHHMMSS}.pdf`) so WhatsApp/Meta media cache never serves a stale copy; admin preview uses stable filename
 - New endpoints:
   - `POST /api/quotations/{qid}/send` — admin/manager: render PDF + dispatch via WA template (`send-media-message` style with `header_document`) + email via SMTP
   - `GET /api/quotations/{qid}/pdf` — admin: download/preview PDF
