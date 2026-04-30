@@ -158,7 +158,7 @@ export default function RequestQuote() {
               <Input label="Name *" required value={details.name} onChange={(v) => setDetails({ ...details, name: v })} testId="public-name" />
               <Input label="Company" value={details.company} onChange={(v) => setDetails({ ...details, company: v })} />
               <Input label="Phone *" required value={details.phone} onChange={(v) => setDetails({ ...details, phone: v })} placeholder="+91 98xxx xxxxx" testId="public-phone" />
-              <Input label="Email" type="email" value={details.email} onChange={(v) => setDetails({ ...details, email: v })} testId="public-email" />
+              <Input label="Email *" required type="email" value={details.email} onChange={(v) => setDetails({ ...details, email: v })} testId="public-email" placeholder="you@company.com" />
               <Input label="GST Number" value={details.gst_number} onChange={(v) => setDetails({ ...details, gst_number: v })} />
               <Input label="State" value={details.state} onChange={(v) => setDetails({ ...details, state: v })} placeholder="Maharashtra" />
               <TextArea label="Billing Address" span value={details.billing_address} onChange={(v) => setDetails({ ...details, billing_address: v })} />

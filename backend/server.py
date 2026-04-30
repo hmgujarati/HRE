@@ -1568,11 +1568,27 @@ async def _generate_quote_pdf(quote: dict) -> Path:
 
 async def _dispatch_finalised_quote(quote: dict) -> dict:
     """Generate PDF, then deliver via WhatsApp template + SMTP if configured.
-    Returns delivery telemetry. Never raises — failures are logged + returned."""
+    Returns delivery telemetry. Never raises — failures are logged + returned.
+    Resolves email/phone from the latest contact record so post-creation contact
+    edits propagate to dispatch."""
     cur = await _get_integrations()
     wa = cur["whatsapp"]
     sm = cur["smtp"]
     delivery = {"pdf": False, "whatsapp": False, "email": False, "errors": {}}
+
+    # Pull fresh contact snapshot for email/phone — quote stores a snapshot at creation.
+    contact_email = (quote.get("contact_email") or "").strip()
+    contact_phone = (quote.get("contact_phone") or "").strip()
+    contact_name = quote.get("contact_name") or ""
+    contact_company = quote.get("contact_company") or ""
+    if quote.get("contact_id"):
+        live = await db.contacts.find_one({"id": quote["contact_id"]}, {"_id": 0})
+        if live:
+            contact_email = contact_email or (live.get("email") or "").strip()
+            contact_phone = contact_phone or (live.get("phone") or "").strip()
+            contact_name = contact_name or live.get("name") or ""
+            contact_company = contact_company or live.get("company") or ""
+
     try:
         pdf_path = await _generate_quote_pdf(quote)
         delivery["pdf"] = True
@@ -1586,15 +1602,16 @@ async def _dispatch_finalised_quote(quote: dict) -> dict:
 
     # WhatsApp document template
     if wa.get("enabled") and wa.get("vendor_uid") and wa.get("token") and wa.get("quote_template_name"):
-        if not public_pdf_url:
+        if not contact_phone:
+            delivery["errors"]["whatsapp"] = "no contact phone"
+        elif not public_pdf_url:
             delivery["errors"]["whatsapp"] = "PUBLIC_BASE_URL not configured for media URL"
         else:
             try:
-                customer_name = quote.get("contact_name") or quote.get("contact_company") or "Customer"
+                customer_name = contact_name or contact_company or "Customer"
                 grand_inr = float(quote.get("grand_total") or 0)
                 grand_str = f"Total: ₹{grand_inr:,.2f}"
                 line_count = len(quote.get("line_items") or [])
-                # Validity field: prefer valid_until, else item count + days
                 valid_iso = (quote.get("valid_until") or "").strip()
                 if valid_iso:
                     try:
@@ -1606,7 +1623,7 @@ async def _dispatch_finalised_quote(quote: dict) -> dict:
                     valid_str = f"{line_count} item{'s' if line_count != 1 else ''} · validity 30 days"
                 await _send_whatsapp_template(
                     wa,
-                    quote.get("contact_phone", ""),
+                    contact_phone,
                     template_name=wa["quote_template_name"],
                     template_language=wa.get("quote_template_language") or "en",
                     field_1=customer_name,
@@ -1627,12 +1644,11 @@ async def _dispatch_finalised_quote(quote: dict) -> dict:
 
     # SMTP email
     if sm.get("enabled") and sm.get("host") and sm.get("username") and sm.get("password") and sm.get("from_email"):
-        to_email = (quote.get("contact_email") or "").strip()
-        if to_email:
+        if contact_email:
             try:
                 subject = f"Quotation {quote.get('quote_number')} from HRE Exporter"
                 body = (
-                    f"Dear {quote.get('contact_name') or 'Sir/Madam'},\n\n"
+                    f"Dear {contact_name or 'Sir/Madam'},\n\n"
                     f"Please find attached the quotation {quote.get('quote_number')} for your inquiry.\n\n"
                     f"Grand Total: ₹{float(quote.get('grand_total') or 0):,.2f}\n\n"
                     f"For any queries, contact us at {SELLER_INFO_EMAIL}.\n\n"
@@ -1641,7 +1657,7 @@ async def _dispatch_finalised_quote(quote: dict) -> dict:
                 import asyncio
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(
-                    None, _send_smtp_email, sm, to_email, subject, body, [pdf_path],
+                    None, _send_smtp_email, sm, contact_email, subject, body, [pdf_path],
                 )
                 delivery["email"] = True
             except Exception as e:
@@ -1825,7 +1841,7 @@ class QuoteRequestStart(BaseModel):
     name: str
     company: Optional[str] = ""
     phone: str
-    email: Optional[str] = ""
+    email: EmailStr  # required for quote PDF dispatch
     gst_number: Optional[str] = ""
     state: Optional[str] = ""
     billing_address: Optional[str] = ""
@@ -1836,6 +1852,8 @@ class QuoteRequestStart(BaseModel):
 async def public_qr_start(data: QuoteRequestStart):
     if not data.phone or len(_norm_phone(data.phone)) < 10:
         raise HTTPException(status_code=400, detail="Valid 10-digit phone number required")
+    if not data.email:
+        raise HTTPException(status_code=400, detail="Email is required so we can email you the quote PDF")
     doc = {
         "id": str(uuid.uuid4()),
         "name": data.name.strip(),
