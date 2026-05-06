@@ -1,0 +1,89 @@
+{
+  "summary": "Phase 2B (Dispatch + PDF + Webhooks) and Phase 2C (Order Tracking) backend testing. 29/29 new tests passed + end-to-end verification of BizChat status webhook (sent→read on real dispatch_log) and email-open pixel (sent→read on real dispatch_log). 34/34 Phase 2A regression tests still pass. WeasyPrint PDF generation works (valid %PDF header returned). Settings CRUD persists, secrets are masked (token/password → bullet-chars), webhook_secret auto-seeds on first GET. Quote /send gracefully returns 200 with {pdf:true, whatsapp:false, email:false} when WhatsApp/SMTP are disabled — no 500 traceback. Order conversion from approved quote mints HRE/ORD/{FY}/{NNNN}, preserves grand_total, and advances through all 11 stages (pending_po → delivered) with timeline events. Proforma PDF is generated via WeasyPrint with PI-specific header and auto-advances stage to proforma_issued. No MongoDB _id leaks anywhere. No blocking bugs found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/orders/from-quote/{qid}",
+        "issue": "Initial stage is 'pending_po' (Awaiting Purchase Order) even when a po_number is provided in the request body. The PO number is stored but the stage is NOT auto-bumped to 'po_received'. Callers have to make a second /advance call. Minor UX paper-cut — consider auto-advancing to po_received when po_number is non-empty."
+      },
+      {
+        "endpoint": "POST /api/orders/{oid}/advance",
+        "issue": "No transition validation — admin/manager can jump from pending_po directly to delivered, skipping PI/production/dispatch. Also accepts going BACKWARDS (e.g. delivered → pending_po). Consider enforcing monotonic progression unless a 'reset' flag is explicitly passed."
+      },
+      {
+        "endpoint": "POST /api/quotations/{qid}/send",
+        "issue": "When WhatsApp & SMTP are both disabled/empty, endpoint still generates the PDF (correct) but returns {whatsapp:false,email:false,errors:{}} with NO explicit warning that no channels were dispatched. Caller has to infer. Consider adding a summary 'dispatched_channels: []' or a warning message so UI can show 'No channels configured'."
+      },
+      {
+        "endpoint": "POST /api/webhooks/bizchat/status",
+        "issue": "Accepts the event shape {data:{wamid,status}} but _extract_status_events is fairly permissive. It won't validate that 'status' ∈ {accepted,sent,delivered,read,failed,pending}; an unknown status would still be written to dispatch_log.status. Consider whitelisting allowed statuses."
+      },
+      {
+        "endpoint": "/api/webhooks/email/open",
+        "issue": "Only upgrades status from 'sent' → 'read'. If the email was 'pending' (e.g. SMTP hadn't returned yet when pixel loaded), the open is silently ignored. Edge case; consider also upgrading 'pending' → 'read'."
+      },
+      {
+        "endpoint": "GET /api/settings/integrations",
+        "issue": "Auto-seeds webhook_secret on first GET (side-effect in a read endpoint). Functionally fine but violates GET-idempotency principle. Consider moving seeding to startup or to the PUT endpoint."
+      },
+      {
+        "endpoint": "PUT /api/settings/integrations (IntegrationsIn schema)",
+        "issue": "`webhook_secret_rotate` is popped from the payload inside the handler even though WhatsAppSettingsIn does not declare it (extra='allow' not set). With pydantic v2 strict mode this field is silently dropped — rotation never triggers. Worth verifying or moving `webhook_secret_rotate` into the Pydantic model explicitly."
+      },
+      {
+        "endpoint": "POST /api/orders/{oid}/proforma/generate",
+        "issue": "If called twice, it regenerates the PDF with a NEW timestamp filename but reuses the existing PI number. Old proforma PDF file is NOT deleted (orphaned file on disk). Minor storage hygiene."
+      },
+      {
+        "endpoint": "Timeline / production_updates",
+        "issue": "No endpoint to delete or edit a timeline event or production_update. Accidental entries are permanent. Consider a soft-delete or admin-only edit endpoint."
+      },
+      {
+        "endpoint": "server.py size",
+        "issue": "Now 3315 lines in a single file. Should be split into routers (auth, catalog, crm, quotations, orders, webhooks, settings) for maintainability per code-review guideline (>700 lines threshold)."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_phase2bc_dispatch_orders.py",
+    "/app/test_reports/pytest/phase2bc_results.xml",
+    "/app/test_reports/pytest/phase2a_regression.xml"
+  ],
+  "action_items": [
+    "Consider auto-advancing stage to 'po_received' when po_number is passed to /orders/from-quote (minor UX).",
+    "Add monotonic stage-transition guard on /orders/{oid}/advance (or a 'force' flag for admin overrides).",
+    "Whitelist allowed statuses in _extract_status_events before writing to dispatch_log.status.",
+    "Move webhook_secret auto-seeding out of GET /api/settings/integrations (side-effect in a read).",
+    "Verify `webhook_secret_rotate` is actually received by the handler (add it to WhatsAppSettingsIn or set model_config extra='allow').",
+    "Consider splitting server.py into per-module routers (>3000 LOC in one file).",
+    "(Carried over from iteration_1/2) Switch INR math to Decimal, add EmailStr/Enum to ContactIn, add pagination params, escape regex in q search."
+  ],
+  "critical_code_review_comments": [
+    "Single-file server.py is 3315 lines. Exceeds 700-line guideline by >4×. Split into routers.",
+    "advance_order_stage has no transition rules — stage can jump forwards or backwards freely.",
+    "webhook_secret_rotate field is referenced in the PUT handler but is not declared on WhatsAppSettingsIn Pydantic model; pydantic v2 will silently drop it unless model_config allows extras.",
+    "GET /api/settings/integrations has a write side-effect (seeds webhook_secret, upserts).",
+    "Proforma regeneration overwrites doc metadata but leaves orphan PDFs on disk.",
+    "BizChat status parsing does not whitelist allowed statuses; a malformed push could write arbitrary strings into dispatch_log.status.",
+    "email_open only promotes 'sent' → 'read'; 'pending' emails silently stay pending even after the pixel fires.",
+    "Orders/contacts/quotations list endpoints still have hard-coded limits (200/500/2000) with no pagination params.",
+    "Float arithmetic for INR still in use for quote + order totals (rounding drift risk, carried from iter 1/2).",
+    "Dispatch log writes to an array inside the quotations document — unbounded growth if /send is called repeatedly."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2bc_dispatch_orders.py"
+  ],
+  "success_rate": {
+    "backend": "100% (29/29 new + 34/34 Phase 2A regression + end-to-end webhook integration confirmed)",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "admin@hrexporter.com / Admin@123 (admin, seeded).",
+  "seed_data_creation": "Each test run creates 1 TEST_ contact + 1 quote + 1 order, advances the order through all stages, generates proforma PDF, then deletes all test data in TestZCleanup. Order counter `order_seq_{FY}` and `pi_seq_{FY}` are incremented once per run (monotonic, no rollback — expected behaviour). Also seeds a PUT to /api/settings/integrations with TEST_VENDOR_UID + test SMTP host=smtp.hostinger.com (integrations remain disabled=false so no external calls are attempted). webhook_secret persists across runs (reused, not rotated).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run with: `pytest /app/backend/tests/test_phase2bc_dispatch_orders.py -v`. The suite is self-contained (creates own contact/quote/order, cleans up). It mutates /api/settings/integrations to set vendor_uid=TEST_VENDOR + SMTP host=smtp.hostinger.com — both remain disabled so external calls never fire, but if the main agent has previously configured real creds, this test will overwrite the non-secret fields (token/password are preserved because empty-string keeps existing). The webhook_secret auto-seeds on first GET of /api/settings/integrations if missing. Order stage constants live in server.py line 2561 (ORDER_STAGES). Proforma filenames timestamped so orphans accumulate across runs — consider cleaning /app/backend/uploads/orders/ periodically. Next phase (2D?) likely: invoice/e-way bill generation, GST filing export, customer portal for tracking — existing PDF generator in /app/backend/quote_pdf.py supports multi-document templating via the title_override parameter already used by proforma.",
+  "rca of the issue": "No blocking bugs found. All listed issues are UX/hygiene/minor-robustness. End-to-end confirmation: (1) POST /api/webhooks/bizchat/status with wamid+status=read upgraded a sent→read on a seeded quotation's dispatch_log (response: {ok:true,events:1,updated:1}). (2) GET /api/webhooks/email/open?t={token} returned a 43-byte image/gif and upgraded sent→read on the matching dispatch_log entry. (3) POST /api/quotations/{qid}/send returned 200 with pdf=true,whatsapp=false,email=false,errors={} when integrations are disabled — gracefully handles missing creds without 500. (4) GET /api/quotations/{qid}/pdf returns a real WeasyPrint-rendered PDF (content starts with %PDF). (5) Order conversion preserves grand_total; advance endpoint walks through po_received→proforma_issued→order_placed→raw_material_check→in_production→packaging→dispatched→delivered with timeline events appended for each. (6) Proforma /generate returns a PDF file with HRE/PI numbering and auto-advances stage. (7) Verified recursively that no response leaks MongoDB _id."
+}
