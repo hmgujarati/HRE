@@ -116,6 +116,14 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Customer-side Order Tracking in My Quotes — implemented (2026-05-06)
+- `/public/my-quotes` API now enriches each quote with an `order` summary block (order_number, stage, stage_label, stage_index, milestones[], proforma_url, lr/invoice URLs)
+- `_public_order_summary` collapses internal stages into 6 customer-friendly milestones: Order Confirmed → Proforma Invoice Issued → In Production → Packaging → Dispatched → Delivered
+- Milestones are marked done/active based on STAGE_ORDER index of the order's current stage, with timestamps pulled from the `timeline.stage` events
+- New component `PublicTrackingStrip.jsx` renders a horizontal progress bar (desktop) / vertical list (mobile) with Phosphor icons + dates
+- MyQuotes.jsx upgraded from flat table to expandable rows; rows with an associated order auto-expand and show the tracking strip inline
+- No new authentication needed — re-uses the existing OTP-based public session token
+
 ## Phase 2B + 2C — regression tested (2026-05-06)
 - Backend testing agent confirmed 29/29 new tests pass + 34/34 Phase 2A regression tests pass
 - End-to-end verified: BizChat status webhook (sent→read), email-open pixel (sent→read), WeasyPrint PDF (valid %PDF), order conversion + 11-stage advance + proforma generation

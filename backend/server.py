@@ -2492,6 +2492,66 @@ async def public_qr_finalise(rid: str, payload: FinalisePayload, token: str):
     }
 
 
+def _public_order_summary(order: dict) -> dict:
+    """Return a customer-safe order tracking snapshot (no internal user emails, no production notes)."""
+    if not order:
+        return None
+    stage = order.get("stage") or "pending_po"
+    # Public-facing milestone list (collapses internal-only stages)
+    public_stages = [
+        ("po_received", "Order Confirmed"),
+        ("proforma_issued", "Proforma Invoice Issued"),
+        ("in_production", "In Production"),
+        ("packaging", "Packaging"),
+        ("dispatched", "Dispatched"),
+        ("delivered", "Delivered"),
+    ]
+    # Build done-flags from timeline kinds (each stage transition writes a `stage_advanced` event w/ to=stage)
+    timeline = order.get("timeline") or []
+    stage_at = {}
+    for ev in timeline:
+        to_stage = ev.get("to") or ev.get("stage")
+        if to_stage and to_stage not in stage_at:
+            stage_at[to_stage] = ev.get("at")
+    # Order index of the current stage
+    try:
+        cur_idx = STAGE_ORDER.index(stage)
+    except ValueError:
+        cur_idx = 0
+    milestones = []
+    for key, label in public_stages:
+        try:
+            key_idx = STAGE_ORDER.index(key)
+        except ValueError:
+            key_idx = -1
+        done = key_idx >= 0 and key_idx <= cur_idx
+        milestones.append({
+            "key": key,
+            "label": label,
+            "done": done,
+            "at": stage_at.get(key),
+        })
+    proforma = order.get("proforma") or {}
+    docs = order.get("documents") or {}
+    return {
+        "order_number": order.get("order_number"),
+        "stage": stage,
+        "stage_label": STAGE_TO_LABEL.get(stage, stage),
+        "stage_index": cur_idx,
+        "total_stages": len(STAGE_ORDER),
+        "milestones": milestones,
+        "po_number": order.get("po_number") or "",
+        "proforma_number": proforma.get("number") or "",
+        "proforma_url": proforma.get("url") or "",
+        "lr_number": (order.get("dispatch") or {}).get("lr_number") or "",
+        "transporter_name": (order.get("dispatch") or {}).get("transporter_name") or "",
+        "dispatched_at": (order.get("dispatch") or {}).get("dispatched_at"),
+        "invoice_url": (docs.get("invoice") or {}).get("url") or "",
+        "lr_url": (docs.get("lr") or {}).get("url") or "",
+        "updated_at": order.get("updated_at"),
+    }
+
+
 @api.get("/public/my-quotes")
 async def public_my_quotes(token: str):
     sess = await _resolve_public_session(token)
@@ -2500,6 +2560,14 @@ async def public_my_quotes(token: str):
     if not cids:
         return []
     items = await db.quotations.find({"contact_id": {"$in": cids}}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    qids = [q["id"] for q in items]
+    orders_by_qid = {}
+    if qids:
+        async for o in db.orders.find({"quote_id": {"$in": qids}}, {"_id": 0}):
+            orders_by_qid[o["quote_id"]] = o
+    for q in items:
+        o = orders_by_qid.get(q["id"])
+        q["order"] = _public_order_summary(o) if o else None
     return items
 
 
