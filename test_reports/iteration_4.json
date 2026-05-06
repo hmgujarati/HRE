@@ -1,0 +1,71 @@
+{
+  "summary": "Phase 2D — Customer-side PO submission via /api/public/quote/{qid}/submit-po. Created /app/backend/tests/test_phase2d_customer_po_submit.py with 18 tests covering: auth (401/403), validation (draft-quote 400, both-empty 400, invalid token 401, missing token 422, forged token 403), instructions-only happy path (creates order in pending_po, NEVER auto-advances stage), PDF + instructions happy path (file persisted under /api/uploads/orders/{oid}/po_*.pdf), idempotency (second submit reuses same order_number), public summary surfaces po_submitted_by_customer/po_url/po_instructions in GET /api/public/my-quotes, settings PUT /api/settings/integrations now persists & returns whatsapp.admin_notify_phone, whatsapp.po_received_admin_template, smtp.admin_notify_email, and graceful admin-notification (admin_notified={email:false,whatsapp:false} with NO 500 and no traceback when integrations disabled). Result: 18/18 new tests PASS. Regression: full Phase 2A (34 tests) + Phase 2B/2C (29 tests) suites STILL PASS — total 63/63. No MongoDB _id leaks. Endpoint behaviour matches the documented contract end-to-end.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/public/quote/{qid}/submit-po",
+        "issue": "Instructions-only submission stores a synthetic doc under documents.po with empty filename/url. The public summary surfaces po_url='' which is correct, but the admin orders UI / PDF preview should treat empty filename as 'no file' explicitly to avoid broken links if accessed naively."
+      },
+      {
+        "endpoint": "POST /api/public/quote/{qid}/submit-po",
+        "issue": "The stage check accepts 'sent' OR 'approved'. POST /api/quotations/{qid}/send only flips status to 'sent' when WhatsApp/SMTP creds succeed. With creds disabled the quote stays in 'draft' and customers cannot submit a PO until an admin manually PATCHes status to 'sent' via /api/quotations/{qid}/status. Recommend: in /quotations/{qid}/send, set status='sent' even when channels are disabled (PDF was still generated and the admin will share the link manually)."
+      },
+      {
+        "endpoint": "POST /api/public/quote/{qid}/submit-po",
+        "issue": "instructions[:500] is stored in the timeline event but the full instructions are saved on documents.po.customer_instructions. If a customer submits >500 chars the timeline preview is truncated. Acceptable but worth documenting."
+      },
+      {
+        "endpoint": "POST /api/public/quote/{qid}/submit-po",
+        "issue": "When the PDF is replaced on a second submission, the PREVIOUS po_*.pdf file remains on disk (orphaned) — only documents.po metadata is overwritten. Same hygiene issue noted previously for proforma. Consider cleaning up the prior file or moving to a 'po_history' array."
+      },
+      {
+        "endpoint": "_save_order_doc",
+        "issue": "Accepts ANY file type — content_type and extension are not validated. A customer could upload a .exe and the server would happily store it under /uploads/orders/{oid}/po_*.exe. PRD says 'PDF file'. Recommend enforcing application/pdf (or .pdf extension) at the FastAPI layer for the public submit-po endpoint."
+      },
+      {
+        "endpoint": "_save_order_doc",
+        "issue": "No size limit on the upload. A malicious customer could submit a multi-GB file. Recommend a max-bytes guard (e.g. 25 MB)."
+      },
+      {
+        "endpoint": "POST /api/public/my-quotes/login/start",
+        "issue": "DEV_OTP_PASSTHROUGH defaults to 'true' (line 1371). In production this leaks the OTP in the response. Should default to false; only enable explicitly in dev .env."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_phase2d_customer_po_submit.py",
+    "/app/test_reports/pytest/phase2d_results.xml",
+    "/app/test_reports/pytest/phase2bc_regression.xml"
+  ],
+  "action_items": [
+    "Optional: in POST /api/quotations/{qid}/send, mark status='sent' even when WhatsApp/SMTP both return false (PDF was generated; admin will share link manually). Current behaviour blocks customers from submitting POs until an admin manually patches status.",
+    "Add file-type validation (application/pdf only) on POST /api/public/quote/{qid}/submit-po; the public endpoint currently accepts any extension.",
+    "Add an upload-size limit (e.g. 25 MB) on _save_order_doc to prevent DoS via huge customer uploads.",
+    "Default DEV_OTP_PASSTHROUGH to false; current default 'true' would expose OTPs in production.",
+    "On replacing documents.po with a new file, delete the previous po_*.pdf to avoid orphaned files (same hygiene issue as proforma).",
+    "(Carried over) Split server.py — now 3574 lines."
+  ],
+  "critical_code_review_comments": [
+    "DEV_OTP_PASSTHROUGH defaults true — security smell for production deployments (server.py:1371).",
+    "_save_order_doc has no MIME/extension whitelist nor size limit; called from a public unauthenticated-by-admin endpoint.",
+    "/quotations/{qid}/send only updates status when creds work — blocks the customer PO flow when WhatsApp/SMTP are disabled. Combined with the 'quote must be sent or approved' check in submit-po, this is a usability gap (workaround: admin PATCH /quotations/{qid}/status).",
+    "submit-po overwrites documents.po wholesale on each call; no version history. Acceptable for MVP but loses prior customer instructions and orphans the previous PDF on disk.",
+    "Notification path is fire-and-forget: errors are caught but no user-visible mechanism informs the admin that the alert never went out (logged only)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2d_customer_po_submit.py"
+  ],
+  "success_rate": {
+    "backend": "100% (18/18 new Phase-2D tests + 63/63 regression Phase 2A/2B/2C)",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "admin@hrexporter.com / Admin@123. Test phone is auto-generated per run (TEST_PO_*); the suite logs in via /public/my-quotes/login/start which returns dev_otp.",
+  "seed_data_creation": "Each run creates 2 TEST_ contacts (primary + 'other' for forged-token test), 1 quote (status=draft → patched to sent), and 1 customer-submitted order. Cleanup in TestZCleanup deletes order, quote, both contacts. Settings fields admin_notify_phone='919999000111', po_received_admin_template='TEST_po_received_admin_v1', admin_notify_email='admin-alerts@example.com' are written but integrations remain disabled, so no external calls fire.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run with: `pytest /app/backend/tests/test_phase2d_customer_po_submit.py -v`. Self-contained. Note that /quotations/{qid}/send does NOT flip status to 'sent' when WhatsApp/SMTP are disabled — the test explicitly PATCHes /api/quotations/{qid}/status to 'sent' as a workaround. If the main agent fixes this in /send, the test will still pass (it just becomes redundant). The forged-token 403 test depends on _resolve_public_session returning a session whose phone_norm differs from the quote's contact — confirmed working. Endpoint never auto-advances stage: stays at 'pending_po' even after PDF + instructions on second call (verified). _save_order_doc has no MIME/extension/size validation — flagged but not fixed. DEV_OTP_PASSTHROUGH default 'true' is a production-leak risk — flagged.",
+  "rca of the issue": "No bugs found in the new submit-po endpoint itself. All happy paths, validation paths, auth paths, and idempotency behaviour conform to the spec. The only friction is upstream: /quotations/{qid}/send won't mark status='sent' unless a real WhatsApp or email actually went out, so in a fresh dev environment the customer cannot submit a PO until an admin manually patches the quote status. Workaround: PATCH /api/quotations/{qid}/status with body {status:'sent'} (admin/manager auth required)."
+}

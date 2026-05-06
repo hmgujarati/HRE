@@ -199,6 +199,15 @@ function WhatsAppTab({ canEdit }) {
           <TemplateField label="Dispatched Template" testId="wa-dispatched-template" value={form.order_dispatched_template} onChange={(v) => setForm({ ...form, order_dispatched_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
           <TemplateField label="LR Received Template" testId="wa-lr-template" value={form.order_lr_template} onChange={(v) => setForm({ ...form, order_lr_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
 
+          <div className="sm:col-span-2 border-t border-zinc-200 mt-2 pt-4">
+            <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Internal Admin Alerts</div>
+            <div className="text-xs text-zinc-500 mb-2">
+              When a customer submits a PO from the public portal, ping our admin instantly. Body vars: <span className="font-mono">{`{{1}}`}</span>=customer, <span className="font-mono">{`{{2}}`}</span>=quote#, <span className="font-mono">{`{{3}}`}</span>=order#, <span className="font-mono">{`{{4}}`}</span>=timestamp.
+            </div>
+          </div>
+          <Field label="Admin WhatsApp Phone" value={form.admin_notify_phone} onChange={(v) => setForm({ ...form, admin_notify_phone: v })} disabled={!canEdit} testId="wa-admin-notify-phone" placeholder="+91 98xxx xxxxx" />
+          <TemplateField label="PO Received Admin Template" testId="wa-po-admin-template" value={form.po_received_admin_template} onChange={(v) => setForm({ ...form, po_received_admin_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+
           <div className="sm:col-span-2 flex justify-end pt-2">
             <button type="submit" disabled={busy || !canEdit} data-testid="wa-save-btn" className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-5 py-3 flex items-center gap-2 disabled:opacity-60">
               <FloppyDisk size={14} weight="bold" /> {busy ? "Saving…" : "Save WhatsApp Settings"}
@@ -384,6 +393,15 @@ function SmtpTab({ canEdit }) {
           />
           <Field label="From Email" value={form.from_email} onChange={(v) => setForm({ ...form, from_email: v })} disabled={!canEdit} testId="smtp-from-email" placeholder="quotes@hrexporter.com" />
           <Field label="From Name" value={form.from_name} onChange={(v) => setForm({ ...form, from_name: v })} disabled={!canEdit} testId="smtp-from-name" placeholder="HRE Exporter" />
+          <Field
+            label="Admin Notify Email"
+            value={form.admin_notify_email}
+            onChange={(v) => setForm({ ...form, admin_notify_email: v })}
+            disabled={!canEdit}
+            testId="smtp-admin-notify-email"
+            placeholder="leave blank to use From Email"
+            span
+          />
           <div className="sm:col-span-2 flex justify-end pt-2">
             <button type="submit" disabled={busy || !canEdit} data-testid="smtp-save-btn" className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-5 py-3 flex items-center gap-2 disabled:opacity-60">
               <FloppyDisk size={14} weight="bold" /> {busy ? "Saving…" : "Save SMTP Settings"}

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
-import { Phone, ArrowRight, FileText, SignOut, CaretDown, CaretRight } from "@phosphor-icons/react";
+import { Phone, ArrowRight, FileText, SignOut, CaretDown, CaretRight, PaperPlaneTilt, CheckCircle } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import QuoteStatusBadge from "@/components/QuoteStatusBadge";
 import PublicTrackingStrip from "@/components/PublicTrackingStrip";
+import SubmitPoModal from "@/components/SubmitPoModal";
 
 export default function MyQuotes() {
   const [token, setToken] = useState(localStorage.getItem("hre_public_token") || "");
@@ -16,6 +17,7 @@ export default function MyQuotes() {
   const [devOtp, setDevOtp] = useState("");
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState({}); // {quoteId: bool}
+  const [poModalQuote, setPoModalQuote] = useState(null);
 
   const loadQuotes = async (t) => {
     try {
@@ -100,6 +102,8 @@ export default function MyQuotes() {
           {quotes.map((q) => {
             const isOpen = !!expanded[q.id];
             const hasOrder = !!q.order;
+            const canSubmitPo = ["sent", "approved"].includes(q.status) && (!hasOrder || q.order.stage === "pending_po");
+            const poAlreadySubmitted = hasOrder && q.order.po_submitted_by_customer;
             return (
               <div key={q.id} className="border border-zinc-200 bg-white" data-testid={`my-quote-${q.id}`}>
                 <button
@@ -123,6 +127,11 @@ export default function MyQuotes() {
                         {q.order.stage_label}
                       </span>
                     )}
+                    {poAlreadySubmitted && (
+                      <span className="text-[10px] uppercase tracking-wider font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-1 flex items-center gap-1">
+                        <CheckCircle size={10} weight="fill" /> PO Sent
+                      </span>
+                    )}
                   </div>
                   <div className="text-right ml-auto">
                     <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold">Total</div>
@@ -130,6 +139,27 @@ export default function MyQuotes() {
                     <div className="text-[10px] font-mono text-zinc-500">{(q.line_items || []).length} line{(q.line_items || []).length === 1 ? "" : "s"}</div>
                   </div>
                 </button>
+
+                {/* PO submission CTA — visible whenever quote is sent/approved and not yet past pending_po */}
+                {canSubmitPo && (
+                  <div className="border-t border-zinc-200 px-5 py-3 bg-amber-50/40 flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-xs text-zinc-700 leading-snug">
+                      {poAlreadySubmitted ? (
+                        <>You've already submitted your PO. Our team will confirm shortly. <span className="text-zinc-500">Need to add more details?</span></>
+                      ) : (
+                        <>Ready to confirm? <span className="font-bold text-[#1A1A1A]">Submit your Purchase Order</span> to start production.</>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setPoModalQuote(q); }}
+                      className="bg-[#1A1A1A] hover:bg-black text-white text-xs uppercase tracking-wider font-bold px-4 py-2.5 flex items-center gap-2"
+                      data-testid={`submit-po-btn-${q.id}`}
+                    >
+                      <PaperPlaneTilt size={14} weight="bold" /> {poAlreadySubmitted ? "Re-submit / Add Note" : "Submit PO"}
+                    </button>
+                  </div>
+                )}
+
                 {hasOrder && isOpen && (
                   <div className="border-t border-zinc-200 p-4 bg-zinc-50/40">
                     <PublicTrackingStrip order={q.order} />
@@ -137,13 +167,21 @@ export default function MyQuotes() {
                 )}
                 {!hasOrder && isOpen && (
                   <div className="border-t border-zinc-200 px-5 py-4 bg-zinc-50/40 text-xs text-zinc-500">
-                    No order tracking yet — once your quote is approved and a PO is issued, live tracking will appear here.
+                    No order tracking yet — once you submit your PO and our team confirms it, live tracking will appear here.
                   </div>
                 )}
               </div>
             );
           })}
         </div>
+
+        <SubmitPoModal
+          open={!!poModalQuote}
+          quote={poModalQuote}
+          token={token}
+          onClose={() => setPoModalQuote(null)}
+          onSubmitted={() => loadQuotes(token)}
+        />
       </div>
     );
   }

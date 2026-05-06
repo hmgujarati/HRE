@@ -16,7 +16,7 @@ from typing import List, Optional, Any, Dict
 import bcrypt
 import jwt
 import openpyxl
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, Form, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -1395,6 +1395,9 @@ DEFAULT_INTEGRATIONS = {
         "order_packaging_template": "",
         "order_dispatched_template": "",
         "order_lr_template": "",
+        # Internal admin alert when customer submits a PO (Phase 2C-customer)
+        "admin_notify_phone": "",
+        "po_received_admin_template": "",
     },
     "smtp": {
         "enabled": False,
@@ -1405,6 +1408,8 @@ DEFAULT_INTEGRATIONS = {
         "password": "",
         "from_email": "",
         "from_name": "HRE Exporter",
+        # Internal admin alert email (falls back to from_email if blank)
+        "admin_notify_email": "",
     },
 }
 
@@ -1867,6 +1872,8 @@ class WhatsAppSettingsIn(BaseModel):
     order_packaging_template: str = ""
     order_dispatched_template: str = ""
     order_lr_template: str = ""
+    admin_notify_phone: str = ""
+    po_received_admin_template: str = ""
     webhook_secret_rotate: Optional[bool] = False  # non-persisted: trigger fresh secret
 
 
@@ -1879,6 +1886,7 @@ class SmtpSettingsIn(BaseModel):
     password: Optional[str] = None  # null = keep existing
     from_email: str = ""
     from_name: str = "HRE Exporter"
+    admin_notify_email: str = ""
 
 
 class IntegrationsIn(BaseModel):
@@ -2548,6 +2556,10 @@ def _public_order_summary(order: dict) -> dict:
         "dispatched_at": (order.get("dispatch") or {}).get("dispatched_at"),
         "invoice_url": (docs.get("invoice") or {}).get("url") or "",
         "lr_url": (docs.get("lr") or {}).get("url") or "",
+        "po_submitted_by_customer": bool((docs.get("po") or {}).get("submitted_by_customer")),
+        "po_submitted_at": (docs.get("po") or {}).get("uploaded_at") if (docs.get("po") or {}).get("submitted_by_customer") else None,
+        "po_url": (docs.get("po") or {}).get("url") or "",
+        "po_instructions": (docs.get("po") or {}).get("customer_instructions") or "",
         "updated_at": order.get("updated_at"),
     }
 
@@ -2581,6 +2593,185 @@ async def public_quote_view(qid: str, token: str):
     if not contact or contact.get("phone_norm") != sess["phone_norm"]:
         raise HTTPException(status_code=403, detail="This quote does not belong to your phone")
     return quote
+
+
+# ----- Customer-side PO submission -----
+async def _notify_admin_po_received(order: dict, quote: dict, contact: dict, has_file: bool, instructions: str):
+    """Fire email + WhatsApp to the admin telling them a PO has been submitted."""
+    settings = await _get_integrations()
+    sm = settings["smtp"]
+    wa = settings["whatsapp"]
+    customer = order.get("contact_company") or order.get("contact_name") or "a customer"
+    quote_no = quote.get("quote_number") or ""
+    order_no = order.get("order_number") or ""
+    po_url = (order.get("documents") or {}).get("po", {}).get("url") or ""
+    body_text_lines = [
+        f"Hello Admin,",
+        "",
+        f"{customer} has just submitted a Purchase Order against quote {quote_no}.",
+        f"Internal order ref: {order_no}",
+        f"Customer phone: {contact.get('phone') or contact.get('phone_norm') or ''}",
+        f"Customer email: {contact.get('email') or ''}",
+        "",
+        f"PO file attached: {'Yes — ' + po_url if has_file and po_url else 'No (instructions only)'}",
+    ]
+    if instructions:
+        body_text_lines += ["", "Customer instructions / message:", "-" * 40, instructions, "-" * 40]
+    body_text_lines += [
+        "",
+        f"Please review the PO in the Orders module and click 'Confirm PO' to advance the order.",
+        "",
+        "— HRExporter system",
+    ]
+    body_text = "\n".join(body_text_lines)
+
+    # Email
+    email_ok = False
+    email_err = None
+    notify_to = (sm.get("admin_notify_email") or sm.get("from_email") or "").strip()
+    if notify_to and sm.get("enabled") and sm.get("host") and sm.get("username") and sm.get("password") and sm.get("from_email"):
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                _send_email_sync,
+                sm,
+                notify_to,
+                f"[HRE] PO received — {customer} ({quote_no})",
+                body_text,
+                None,
+                None,
+            )
+            email_ok = True
+        except Exception as e:
+            email_err = str(e)
+            logger.exception("[customer-po-notify] email failed")
+
+    # WhatsApp
+    wa_ok = False
+    wa_err = None
+    admin_phone = (wa.get("admin_notify_phone") or "").strip()
+    tpl_name = (wa.get("po_received_admin_template") or "").strip()
+    if admin_phone and tpl_name and wa.get("enabled") and wa.get("vendor_uid") and wa.get("token"):
+        try:
+            extra: Dict[str, Any] = {
+                "field_2": quote_no,
+                "field_3": order_no or "(new)",
+                "field_4": datetime.now().strftime("%d-%m-%Y %H:%M"),
+            }
+            if has_file and po_url:
+                extra["header_document"] = po_url
+                extra["header_document_name"] = (order.get("documents") or {}).get("po", {}).get("filename") or "po.pdf"
+            await _send_whatsapp_template(
+                wa, admin_phone,
+                template_name=tpl_name,
+                template_language=wa.get("quote_template_language") or "en",
+                field_1=customer,
+                extra=extra,
+            )
+            wa_ok = True
+        except Exception as e:
+            wa_err = str(e)
+            logger.exception("[customer-po-notify] whatsapp failed")
+
+    return {"email": email_ok, "email_error": email_err, "whatsapp": wa_ok, "whatsapp_error": wa_err}
+
+
+@api.post("/public/quote/{qid}/submit-po")
+async def public_submit_po(
+    qid: str,
+    token: str = Form(...),
+    instructions: str = Form(""),
+    file: Optional[UploadFile] = File(None),
+):
+    """Customer-side PO submission. Either a PDF or instructions text (or both) is required.
+    Creates a draft order in `pending_po` if none exists; otherwise attaches PO + instructions.
+    Never auto-advances the stage — admin must click 'Confirm PO'."""
+    sess = await _resolve_public_session(token)
+    quote = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    contact = await db.contacts.find_one({"id": quote.get("contact_id")}, {"_id": 0})
+    if not contact or contact.get("phone_norm") != sess["phone_norm"]:
+        raise HTTPException(status_code=403, detail="This quote does not belong to your phone")
+    if quote.get("status") not in ("approved", "sent"):
+        raise HTTPException(status_code=400, detail="Quote is not yet ready to receive a PO. Please ask our team to send the quote first.")
+
+    instructions = (instructions or "").strip()
+    has_file = bool(file and (file.filename or "").strip())
+    if not has_file and not instructions:
+        raise HTTPException(status_code=400, detail="Please attach a PO PDF or type your instructions before submitting.")
+
+    # Ensure an order exists (create in pending_po if not)
+    order = await db.orders.find_one({"quote_id": qid}, {"_id": 0})
+    created_now = False
+    if not order:
+        order = _mint_order_from_quote(quote, contact.get("email") or "customer@portal", po_number="")
+        order["order_number"] = await _next_order_number()
+        # Mark how it was created
+        order["timeline"] = [
+            _timeline_event("created", "Order auto-created from customer PO submission",
+                            contact.get("email") or "customer@portal", quote_number=quote.get("quote_number")),
+        ]
+        await db.orders.insert_one(order)
+        created_now = True
+
+    oid = order["id"]
+    # Save the PO file (if provided)
+    po_doc = None
+    if has_file:
+        po_doc = await _save_order_doc(
+            oid, "po", file,
+            user_email=contact.get("email") or "customer@portal",
+            extra={"submitted_by_customer": True, "customer_instructions": instructions},
+        )
+
+    # Build update
+    update_set: Dict[str, Any] = {
+        "po_received_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    if po_doc:
+        update_set["documents.po"] = po_doc
+    else:
+        # Instructions-only PO — store as a synthetic doc record (no file)
+        update_set["documents.po"] = {
+            "filename": "",
+            "original_name": "",
+            "url": "",
+            "uploaded_at": now_iso(),
+            "uploaded_by": contact.get("email") or "customer@portal",
+            "submitted_by_customer": True,
+            "customer_instructions": instructions,
+            "po_number": "",
+        }
+
+    ev = _timeline_event(
+        "customer_po",
+        "Customer submitted PO" + (" (PDF attached)" if has_file else " (instructions only)"),
+        contact.get("email") or "customer@portal",
+        has_file=has_file,
+        instructions=instructions[:500],
+    )
+    await db.orders.update_one(
+        {"id": oid},
+        {"$set": update_set, "$push": {"timeline": ev}},
+    )
+
+    # Refresh order for notification
+    fresh = await db.orders.find_one({"id": oid}, {"_id": 0})
+    notify = await _notify_admin_po_received(fresh, quote, contact, has_file, instructions)
+
+    return {
+        "ok": True,
+        "order_number": fresh.get("order_number"),
+        "stage": fresh.get("stage"),
+        "stage_label": STAGE_TO_LABEL.get(fresh.get("stage"), fresh.get("stage")),
+        "had_existing_order": not created_now,
+        "po_attached": has_file,
+        "admin_notified": notify,
+    }
 
 
 class PhoneOnlyOtp(BaseModel):
