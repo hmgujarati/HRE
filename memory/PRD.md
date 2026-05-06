@@ -116,6 +116,21 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Phase 2B + 2C — regression tested (2026-05-06)
+- Backend testing agent confirmed 29/29 new tests pass + 34/34 Phase 2A regression tests pass
+- End-to-end verified: BizChat status webhook (sent→read), email-open pixel (sent→read), WeasyPrint PDF (valid %PDF), order conversion + 11-stage advance + proforma generation
+- Quote /send gracefully returns 200 with {pdf:true, whatsapp:false, email:false} when WA/SMTP empty (no 500)
+- No critical bugs; 10 minor UX/hygiene items logged in /app/test_reports/iteration_3.json
+
+## Backlog (post 2C, P1)
+- Customer-facing public order tracking page `/track/{order#}` (P0)
+- Hot Leads dashboard widget — quotes with READ status not yet approved/rejected
+- Auto WhatsApp customer notification on stage change (template per stage)
+- Phase 2D: WhatsApp inbound chatbot for self-serve quotes
+- Refactor server.py (3315 lines) → routers per module
+- Stage transition guard on /orders/{oid}/advance (no jumping forward/backward)
+- Switch INR math to Decimal (paise drift)
+
 ## Test Status
-- Backend: 28/28 tests passing (`pytest backend/tests/test_hre_crm_backend.py`)
-- Frontend: smoke tested — login + dashboard rendering verified
+- Backend: 29/29 Phase 2B/2C + 34/34 Phase 2A regression passing (iteration_3.json, 2026-05-06)
+- Frontend: login renders post Emergent-branding removal (smoke tested)
