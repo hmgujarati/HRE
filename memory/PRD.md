@@ -116,6 +116,18 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Customer-side PO Submission — implemented (2026-05-06)
+- New public endpoint `POST /api/public/quote/{qid}/submit-po` (multipart: token, instructions, optional file)
+- Either PDF/image attachment OR free-text instructions required (or both); 25MB cap; PDF/PNG/JPG/JPEG/WEBP only
+- Auto-creates an order in `pending_po` if none exists; otherwise attaches PO to existing order; never auto-advances stage (admin must Confirm)
+- Stores `documents.po` with `submitted_by_customer=true`, `customer_instructions`, `uploaded_at`
+- Appends a `customer_po` timeline event for full audit
+- Notifies admin via Email + WhatsApp (graceful no-op if integrations not configured)
+- New settings fields: `whatsapp.admin_notify_phone`, `whatsapp.po_received_admin_template`, `smtp.admin_notify_email` — exposed in Settings → WhatsApp + Email tabs
+- `/quotations/{qid}/send` now flips status to `sent` even when no channel is configured (PDF generation is enough) — unblocks customer PO submission in dev/disabled environments
+- Frontend: new `SubmitPoModal.jsx` with file picker + textarea; "Submit PO" button on each MyQuotes row when quote is sent/approved AND order is in pending_po (or no order yet); shows "PO Sent" pill + "Re-submit / Add Note" CTA when already submitted
+- Backend tests: 18/18 new Phase-2D tests + 63/63 regression — all passing (`/app/backend/tests/test_phase2d_customer_po_submit.py`)
+
 ## Customer-side Order Tracking in My Quotes — implemented (2026-05-06)
 - `/public/my-quotes` API now enriches each quote with an `order` summary block (order_number, stage, stage_label, stage_index, milestones[], proforma_url, lr/invoice URLs)
 - `_public_order_summary` collapses internal stages into 6 customer-friendly milestones: Order Confirmed → Proforma Invoice Issued → In Production → Packaging → Dispatched → Delivered

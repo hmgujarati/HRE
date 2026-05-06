@@ -1281,7 +1281,11 @@ async def send_quotation_dispatch(qid: str, _: dict = Depends(require_role("admi
     if not quote:
         raise HTTPException(status_code=404, detail="Quotation not found")
     delivery = await _dispatch_finalised_quote(quote)
-    if delivery.get("whatsapp") or delivery.get("email"):
+    # PDF was always generated; mark as 'sent' even when no channel was configured —
+    # admin will share the link manually. Otherwise the customer cannot submit a PO.
+    pdf_ok = bool(delivery.get("pdf"))
+    channel_ok = bool(delivery.get("whatsapp") or delivery.get("email"))
+    if pdf_ok or channel_ok:
         await db.quotations.update_one(
             {"id": qid},
             {"$set": {"sent_at": now_iso(), "status": "sent" if quote.get("status") == "draft" else quote.get("status")}},
@@ -2702,6 +2706,26 @@ async def public_submit_po(
     has_file = bool(file and (file.filename or "").strip())
     if not has_file and not instructions:
         raise HTTPException(status_code=400, detail="Please attach a PO PDF or type your instructions before submitting.")
+
+    # File hygiene: PDF/image-only + 25 MB cap
+    MAX_BYTES = 25 * 1024 * 1024
+    if has_file:
+        ct = (file.content_type or "").lower()
+        ext = (file.filename.rsplit(".", 1)[-1] if "." in (file.filename or "") else "").lower()
+        allowed_ct = {"application/pdf", "image/png", "image/jpeg", "image/jpg", "image/webp"}
+        allowed_ext = {"pdf", "png", "jpg", "jpeg", "webp"}
+        if ct not in allowed_ct and ext not in allowed_ext:
+            raise HTTPException(status_code=400, detail="Only PDF or image files are accepted.")
+        # Peek size — UploadFile.spool_max_size is small, so read into memory check
+        # We'll let _save_order_doc read the bytes; pre-check via seek if available
+        try:
+            file.file.seek(0, 2)
+            size = file.file.tell()
+            file.file.seek(0)
+        except Exception:
+            size = 0
+        if size and size > MAX_BYTES:
+            raise HTTPException(status_code=413, detail="File too large. Max 25 MB.")
 
     # Ensure an order exists (create in pending_po if not)
     order = await db.orders.find_one({"quote_id": qid}, {"_id": 0})
