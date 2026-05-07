@@ -1,0 +1,56 @@
+{
+  "summary": "Phase 2E — dual-channel (WhatsApp + Email parallel) OTP regression. Created /app/backend/tests/test_phase2e_dual_channel_otp.py with 12 tests (11 passed, 1 intentionally skipped). Validated: (a) _otp_delivery_label() label matrix [dev/whatsapp/email/whatsapp+email]; (b) both channels disabled → delivery='dev' + dev_otp returned; (c) verify-otp succeeds after dev send and returns a session token; (d) SMTP enabled with placeholder creds → email_error surfaced, no 500, dev_otp present (gating: both failed); (e) WA enabled but otp_template_name empty → no attempt, no whatsapp_error key; (f) WA enabled with placeholder vendor_uid + bogus template → BizChatAPI returns HTTP 200 OK, helper marks wa_ok=True, response delivery='whatsapp', dev_otp NOT present (security gate verified); (g) BOTH enabled (WA succeeds via permissive BizChat, SMTP fails) → delivery='whatsapp', email_error present, dev_otp NOT present; (h) /my-quotes/login/start with phone 8200663263 (Harsh Guajarati) auto-looks-up email from contacts and returns email_hint='hm••••••••@gmail.com' (8 bullets, NOT 7 as the request stated — bullet count = len('hmgujarati')-2 = 8); (i) /my-quotes/login/start with phone 9999999999 (no contact) → no email_hint key in response; (j) phone='123' → 400 validation. Cleanup class restored integrations doc (both disabled). Full regression: Phase 2A (34) + 2B/2C (29) + 2D (18) + 2E (11) = 92 passed, 1 skipped.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/public/quote-requests/{rid}/send-otp",
+        "issue": "BizChatAPI returns HTTP 200 OK for ANY vendor_uid+token combination (verified live with 'TEST_VENDOR' / 'TEST_TOKEN_PLACEHOLDER'). _send_otp_whatsapp therefore reports wa_ok=True and the user sees delivery='whatsapp' even though the message was never actually queued/delivered. Recommend parsing BizChat's response body to detect upstream errors instead of relying on HTTP status alone."
+      },
+      {
+        "endpoint": "POST /api/public/my-quotes/login/start",
+        "issue": "Email-hint masking uses len(local)-2 bullets — for 'hmgujarati' that produces 8 bullets ('hm••••••••@gmail.com'), not the 7 the request copy stated. Current code is mathematically correct; just flagging the doc/spec mismatch."
+      },
+      {
+        "endpoint": "POST /api/public/quote-requests/{rid}/send-otp",
+        "issue": "DEV_OTP_PASSTHROUGH still defaults to 'true' (server.py:1375). Verified gating works (dev_otp omitted when WA succeeds), but the default is a production-leak risk if env-var is unset. Carried over from iteration_4."
+      },
+      {
+        "endpoint": "_get_integrations / settings",
+        "issue": "Token persistence: PUT /api/settings/integrations with token=None correctly preserves the existing token, but GET returns the masked token; round-tripping the GET back into PUT (without nulling token) would overwrite the live token with the bullet-masked string. Worth a guard: ignore tokens that look like the masked output."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_phase2e_dual_channel_otp.py",
+    "/app/test_reports/pytest/phase2e_otp.xml",
+    "/app/test_reports/pytest/phase2_full_regression.xml"
+  ],
+  "action_items": [
+    "Inspect BizChat's JSON response body (not just HTTP 200) to determine actual delivery success — current implementation marks wa_ok=True for any 200 response which masks misconfigured vendor_uid/template combinations.",
+    "Default DEV_OTP_PASSTHROUGH to 'false' (server.py:1375). Carried over.",
+    "Reject incoming PUT /api/settings/integrations payloads where wa.token / smtp.password equal the masked bullet output of the most-recent GET (otherwise round-tripping the masked token would overwrite the real one).",
+    "Document/correct the email_hint masking rule (the request stated 7 bullets for 'hmgujarati'; code produces 8 — code is mathematically right, but spec/UI copy may be misaligned)."
+  ],
+  "critical_code_review_comments": [
+    "BizChatAPI integration trusts HTTP status alone; an upstream 'invalid template' error returned with a 200 wrapper would still be reported as success.",
+    "DEV_OTP_PASSTHROUGH default 'true' remains a security concern in prod (carried over from iteration 4).",
+    "_send_otp_email body builds a large HTML+text payload synchronously inside an executor — fine for low volume but should consider a template engine + queue for scale.",
+    "The two public OTP endpoints (public_qr_send_otp + public_login_start) duplicate the dispatch+gating block (~25 lines each). Worth extracting a single _dispatch_otp(qr_doc, code) helper to keep behaviour in lock-step. Currently any future fix has to be applied in both places."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase2e_dual_channel_otp.py"
+  ],
+  "success_rate": {
+    "backend": "100% (11/11 new Phase-2E + 81/81 regression = 92/92 active; 1 skipped)",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "admin@hrexporter.com / Admin@123. Public test uses Harsh Guajarati 8200663263 / hmgujarati@gmail.com (already seeded).",
+  "seed_data_creation": "Each TestB/C/D/E/F creates a transient quote_request via POST /public/quote-requests/start with name='TEST_OTP'. No persistent test data created. TestZCleanup restores the integrations doc to disabled (matches the original snapshot taken at module setup).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run with: `pytest /app/backend/tests/test_phase2e_dual_channel_otp.py -v` (5 s) or full regression `pytest /app/backend/tests/test_phase2a_crm_quotations.py tests/test_phase2bc_dispatch_orders.py tests/test_phase2d_customer_po_submit.py tests/test_phase2e_dual_channel_otp.py -v` (~24 s, 92 passed/1 skipped). KEY FINDING: BizChatAPI responds HTTP 200 OK for ANY vendor_uid/token combination — so live tests of WA-success path naturally exercise the dev_otp gating without needing in-process mocks. TestG was implemented with TestClient + AsyncMock but hit a motor cross-loop issue ('Event loop is closed') because motor binds to the first asyncio loop at server import; deferring to TestD/TestE which validate the same gating end-to-end. The gating IS correctly enforced: when delivery in {whatsapp, email, whatsapp+email}, dev_otp is omitted; only when delivery='dev' (both failed) is it included. Email-hint masking produces 8 bullets for 'hmgujarati' (not 7 as the request copy stated) — the test asserts 8 because that's what the code produces and the request copy was a typo. /api/public/my-quotes/login/start does NOT include email_hint when the phone is not in contacts (verified). All response shapes match the documented contract; no 500s under any combination of (wa_enabled, smtp_enabled).",
+  "rca of the issue": "No defect found in the dual-channel dispatch logic. The dispatch is parallel-by-default (sequential awaits but no fan-out concurrency — could be made truly parallel with asyncio.gather() for marginal latency improvement, but functionally correct). Errors from each channel are caught and surfaced as whatsapp_error/email_error in the response — never raised. The dev_otp gate is correctly evaluated as `DEV_OTP_PASSTHROUGH and not (wa_ok or email_ok)` — so any single channel success suppresses the dev fallback. The only behavioural surprise is that BizChatAPI accepts arbitrary tokens with HTTP 200, which means a misconfigured vendor will silently see delivery='whatsapp' without messages actually arriving — a future hardening would inspect BizChat's response body."
+}
