@@ -116,15 +116,14 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
-## Dual-channel OTP (WhatsApp + Email) — implemented (2026-05-06)
-- New shared helpers `_send_otp_whatsapp` / `_send_otp_email` / `_otp_delivery_label`; both fire in parallel for the **same OTP code** so customers get it whichever channel they're closer to
+## Dual-channel OTP (WhatsApp + Email) — implemented + hardened (2026-05-06)
+- New shared helpers `_send_otp_whatsapp` / `_send_otp_email` / `_otp_delivery_label`; both fire in parallel for the **same OTP code**
 - Email OTP uses Hostinger SMTP (multipart text + branded HTML, 60-min validity badge, gold accent)
-- Wired into both flows:
-  - `POST /public/quote-requests/{rid}/send-otp` (request-quote portal — uses the email customer typed in)
-  - `POST /public/my-quotes/login/start` (returning customer login — looks up email from contacts by phone_norm)
-- Response now includes `delivery: "whatsapp+email" | "whatsapp" | "email" | "dev"` + masked `email_hint`
-- Frontend MyQuotes OTP screen surfaces "We've sent a code to your WhatsApp (…) and email (ha•••••@…)" so user knows where to look
-- `dev_otp` only leaks when BOTH channels failed/disabled (still gated by `DEV_OTP_PASSTHROUGH`)
+- Wired into both flows: `/public/quote-requests/{rid}/send-otp` (request-quote) and `/public/my-quotes/login/start` (login lookups email by phone_norm)
+- Response: `delivery: "whatsapp+email" | "whatsapp" | "email" | "dev"` + masked `email_hint`
+- Frontend MyQuotes shows "We've sent a code to your WhatsApp (…) and email (ha•••••@…)"
+- **Hardening (2026-05-06):** `_send_whatsapp_template` now requires `data.wamid` or `data.log_uid` in BizChat's response body. BizChatAPI returns HTTP 200 even for invalid vendor_uid/token combos, but without a wamid — previously this falsely reported `delivery=whatsapp`. Now correctly falls back to other channel or dev.
+- Tested: 11/11 Phase 2E + 58/58 full regression — all passing
 
 ## Customer-side PO Submission — implemented (2026-05-06)
 - New public endpoint `POST /api/public/quote/{qid}/submit-po` (multipart: token, instructions, optional file)

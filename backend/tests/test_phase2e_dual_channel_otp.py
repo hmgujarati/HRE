@@ -197,8 +197,10 @@ class TestDWhatsAppOnly:
         assert "dev_otp" in body
 
     def test_wa_enabled_with_template_bizchat_permissive(self, api, admin_headers, original_integrations):
-        """BizChatAPI returns HTTP 200 for arbitrary tokens — so the helper
-        reports success and delivery='whatsapp'. dev_otp must NOT leak."""
+        """BizChatAPI returns HTTP 200 for arbitrary tokens, but our hardened
+        helper rejects responses without a `data.wamid` — so a misconfigured
+        vendor is correctly reported as failure (delivery='dev', whatsapp_error
+        surfaced). dev_otp leaks only because BOTH channels effectively failed."""
         _put_integrations(api, admin_headers,
                           wa_patch={"enabled": True, "vendor_uid": "TEST_VENDOR",
                                     "token": "TEST_TOKEN_PLACEHOLDER",
@@ -209,18 +211,18 @@ class TestDWhatsAppOnly:
         r = api.post(f"{BASE_URL}/api/public/quote-requests/{rid}/send-otp")
         assert r.status_code == 200, r.text  # never 500
         body = r.json()
-        # Live finding: BizChatAPI accepts unknown tokens with 200 OK
-        assert body["delivery"] == "whatsapp"
-        assert "whatsapp_error" not in body
-        assert "dev_otp" not in body  # gating: WA succeeded → no leak
+        # Hardened: missing wamid in BizChat body → treat as failure
+        assert body["delivery"] == "dev"
+        assert body.get("whatsapp_error")  # error surfaced
+        assert "dev_otp" in body  # both effectively failed → dev fallback
 
 
 # ───────────────────────── E. BOTH enabled (both fail) ─────────────────────────
 
 class TestEBothEnabledMixed:
-    """Both WA + SMTP enabled. Bizchat returns 200 → WA succeeds. SMTP host
-    is invalid → email fails. Expect delivery='whatsapp', email_error present,
-    no 500, dev_otp NOT exposed (gating)."""
+    """Both WA + SMTP enabled. BizChat returns 200 OK without wamid → hardened
+    helper marks WA as failed. SMTP host is invalid → email fails too. Expect
+    delivery='dev' with both *_error fields, no 500, dev_otp present."""
 
     def test_both_enabled_wa_succeeds_smtp_fails(self, api, admin_headers, original_integrations):
         _put_integrations(api, admin_headers,
@@ -238,10 +240,10 @@ class TestEBothEnabledMixed:
         r = api.post(f"{BASE_URL}/api/public/quote-requests/{rid}/send-otp")
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["delivery"] == "whatsapp"
-        assert "whatsapp_error" not in body
+        assert body["delivery"] == "dev"
+        assert body.get("whatsapp_error")  # WA misconfig surfaced
         assert body.get("email_error")  # SMTP misconfig surfaced
-        assert "dev_otp" not in body  # gating: at least one succeeded
+        assert "dev_otp" in body  # both failed → dev fallback (gating still works)
 
 
 # ───────────────────────── F. /my-quotes/login/start ─────────────────────────

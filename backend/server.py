@@ -1510,6 +1510,16 @@ async def _send_whatsapp_template(
             detail = body.get("message") or "Unknown BizChat error"
             logger.error(f"[WA] template send error body={body}")
             raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {detail}")
+        # Strong success signal: BizChat sets data.wamid only when the message is
+        # actually accepted/queued. Some misconfigurations return 200 OK with an
+        # empty/missing wamid — treat that as failure so callers don't get a false
+        # 'delivery: whatsapp' confirmation.
+        if isinstance(body, dict):
+            data = body.get("data") or {}
+            if not (data.get("wamid") or data.get("log_uid")):
+                detail = body.get("message") or body.get("error") or "BizChat accepted the request but did not return a message ID"
+                logger.error(f"[WA] template send returned no wamid body={body}")
+                raise HTTPException(status_code=502, detail=f"WhatsApp send failed: {detail}")
         logger.info(f"[WA] template={template_name} → {payload['phone_number']} ok")
         return body if isinstance(body, dict) else {"raw": body}
     except httpx.HTTPError as e:
