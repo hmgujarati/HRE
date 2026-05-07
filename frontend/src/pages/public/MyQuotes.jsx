@@ -15,6 +15,8 @@ export default function MyQuotes() {
   const [otp, setOtp] = useState("");
   const [requestId, setRequestId] = useState("");
   const [devOtp, setDevOtp] = useState("");
+  const [otpDelivery, setOtpDelivery] = useState(""); // "whatsapp+email" | "whatsapp" | "email" | "dev"
+  const [otpEmailHint, setOtpEmailHint] = useState("");
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState({}); // {quoteId: bool}
   const [poModalQuote, setPoModalQuote] = useState(null);
@@ -49,8 +51,16 @@ export default function MyQuotes() {
       const { data } = await api.post("/public/my-quotes/login/start", { phone });
       setRequestId(data.request_id);
       if (data.dev_otp) setDevOtp(data.dev_otp);
+      setOtpDelivery(data.delivery || "");
+      setOtpEmailHint(data.email_hint || "");
       setStage("enter-otp");
-      toast.success("OTP sent");
+      const channels = {
+        "whatsapp+email": "WhatsApp & Email",
+        "whatsapp": "WhatsApp",
+        "email": "Email",
+        "dev": "Dev mode (check screen)",
+      };
+      toast.success(`OTP sent via ${channels[data.delivery] || "your contact channel"}`);
     } catch (err) {
       toast.error(formatApiError(err?.response?.data?.detail));
     } finally { setBusy(false); }
@@ -209,7 +219,20 @@ export default function MyQuotes() {
         )}
         {stage === "enter-otp" && (
           <form onSubmit={verifyOtp} className="p-6 space-y-4" data-testid="my-quotes-otp-form">
-            <p className="text-sm text-zinc-600">Enter the 6-digit code sent to {phone}.</p>
+            <div className="text-sm text-zinc-600">
+              {otpDelivery === "whatsapp+email" && (
+                <>We've sent a 6-digit code to your <b>WhatsApp</b> ({phone}) and <b>email</b> ({otpEmailHint}). Enter it below.</>
+              )}
+              {otpDelivery === "whatsapp" && (
+                <>We've sent a 6-digit code to your <b>WhatsApp</b> ({phone}). Enter it below.</>
+              )}
+              {otpDelivery === "email" && (
+                <>We've sent a 6-digit code to your <b>email</b> ({otpEmailHint}). Enter it below.</>
+              )}
+              {(!otpDelivery || otpDelivery === "dev") && (
+                <>Enter the 6-digit code sent to {phone}.</>
+              )}
+            </div>
             {devOtp && (
               <div className="bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">
                 <strong>Dev mode:</strong> code is <span className="font-mono font-bold">{devOtp}</span>

@@ -2200,6 +2200,65 @@ def _hash_otp(code: str) -> str:
     return hashlib.sha256(code.encode()).hexdigest()
 
 
+async def _send_otp_whatsapp(wa: dict, phone: str, code: str) -> tuple[bool, Optional[str]]:
+    if not (phone and wa.get("enabled") and wa.get("vendor_uid") and wa.get("token") and wa.get("otp_template_name")):
+        return False, None
+    try:
+        await _send_whatsapp_template(
+            wa, phone,
+            template_name=wa["otp_template_name"],
+            template_language=wa.get("otp_template_language") or "en",
+            field_1=code,
+            button_0=code,
+        )
+        return True, None
+    except HTTPException as e:
+        logger.error(f"[OTP-WA] send failed: {e.detail}")
+        return False, str(e.detail)
+    except Exception as e:
+        logger.exception("[OTP-WA] unexpected error")
+        return False, str(e)
+
+
+async def _send_otp_email(sm: dict, to_email: str, code: str) -> tuple[bool, Optional[str]]:
+    if not (to_email and sm.get("enabled") and sm.get("host") and sm.get("username") and sm.get("password") and sm.get("from_email")):
+        return False, None
+    subject = f"Your HRE Exporter verification code is {code}"
+    body_text = (
+        f"Your HRE Exporter verification code is: {code}\n\n"
+        f"This code expires in {OTP_TTL_SECONDS // 60} minutes.\n\n"
+        "If you didn't request this, please ignore this email.\n\n"
+        "— HRExporter\nAn ISO 9001:2015 Certified Company"
+    )
+    body_html = f"""<!doctype html>
+<html><body style="font-family:Arial,Helvetica,sans-serif;background:#f5f5f5;padding:32px 16px;margin:0;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e4e4e7;">
+<tr><td style="background:#1A1A1A;color:#FBAE17;padding:18px 24px;font-weight:800;letter-spacing:2px;font-size:11px;text-transform:uppercase;">HRE Exporter — Verification</td></tr>
+<tr><td style="padding:32px 24px;">
+<p style="margin:0 0 16px;color:#1A1A1A;font-size:14px;">Hello,</p>
+<p style="margin:0 0 24px;color:#3f3f46;font-size:14px;line-height:1.55;">Use the code below to verify your phone number and continue with your quote on HRExporter.</p>
+<div style="background:#FBAE17;color:#1A1A1A;font-weight:900;font-size:34px;letter-spacing:10px;text-align:center;padding:18px 12px;font-family:'Courier New',monospace;border:2px solid #1A1A1A;">{code}</div>
+<p style="margin:24px 0 0;color:#71717a;font-size:12px;">This code expires in <b>{OTP_TTL_SECONDS // 60} minutes</b>. If you didn't request this, you can safely ignore this email.</p>
+</td></tr>
+<tr><td style="background:#fafafa;color:#a1a1aa;padding:14px 24px;font-size:11px;text-align:center;border-top:1px solid #e4e4e7;">An ISO 9001:2015 Certified Company &middot; info@hrexporter.com</td></tr>
+</table></body></html>"""
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _send_email_sync, sm, to_email, subject, body_text, None, body_html)
+        return True, None
+    except Exception as e:
+        logger.exception("[OTP-Email] send failed")
+        return False, str(e)
+
+
+def _otp_delivery_label(wa_ok: bool, email_ok: bool) -> str:
+    if wa_ok and email_ok: return "whatsapp+email"
+    if wa_ok: return "whatsapp"
+    if email_ok: return "email"
+    return "dev"
+
+
 def _now_dt() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -2284,32 +2343,15 @@ async def public_qr_send_otp(rid: str):
         }},
     )
     cur = await _get_integrations()
-    wa = cur["whatsapp"]
-    delivery = "dev"
-    delivery_error: Optional[str] = None
-    if wa.get("enabled") and wa.get("vendor_uid") and wa.get("token") and wa.get("otp_template_name"):
-        try:
-            await _send_whatsapp_template(
-                wa,
-                qr["phone"],
-                template_name=wa["otp_template_name"],
-                template_language=wa.get("otp_template_language") or "en",
-                field_1=code,
-                button_0=code,  # for COPY_CODE / URL button OTP templates
-            )
-            delivery = "whatsapp"
-        except HTTPException as e:
-            delivery_error = str(e.detail)
-            logger.error(f"[OTP] WhatsApp send failed for {rid}: {delivery_error}")
-        except Exception as e:
-            delivery_error = str(e)
-            logger.exception(f"[OTP] unexpected WhatsApp error for {rid}")
+    wa_ok, wa_err = await _send_otp_whatsapp(cur["whatsapp"], qr.get("phone") or "", code)
+    email_ok, email_err = await _send_otp_email(cur["smtp"], qr.get("email") or "", code)
 
-    logger.info(f"[OTP] phone={qr['phone']} code={code} delivery={delivery} (request_id={rid})")
+    delivery = _otp_delivery_label(wa_ok, email_ok)
+    logger.info(f"[OTP] phone={qr.get('phone')} email={qr.get('email')} code={code} delivery={delivery} (request_id={rid})")
     resp: Dict[str, Any] = {"ok": True, "expires_in": OTP_TTL_SECONDS, "delivery": delivery}
-    if delivery_error:
-        resp["delivery_error"] = delivery_error
-    if DEV_OTP_PASSTHROUGH and delivery != "whatsapp":
+    if wa_err: resp["whatsapp_error"] = wa_err
+    if email_err: resp["email_error"] = email_err
+    if DEV_OTP_PASSTHROUGH and not (wa_ok or email_ok):
         resp["dev_otp"] = code
     return resp
 
@@ -2810,18 +2852,32 @@ async def public_login_start(data: PhoneOnlyOtp):
     rid = str(uuid.uuid4())
     code = f"{secrets.randbelow(900000) + 100000}"
     expires = _now_dt() + timedelta(seconds=OTP_TTL_SECONDS)
+    # Look up the customer's email by phone (so OTP can also go to their email)
+    contact = await db.contacts.find_one({"phone_norm": pn}, {"_id": 0, "email": 1})
+    contact_email = (contact or {}).get("email") or ""
     await db.quote_requests.insert_one({
         "id": rid,
         "name": "", "company": "", "phone": data.phone, "phone_norm": pn,
-        "email": "", "gst_number": "", "state": "",
+        "email": contact_email, "gst_number": "", "state": "",
         "billing_address": "", "shipping_address": "",
         "verified": False, "session_token": None, "session_expires_at": None,
         "otp_hash": _hash_otp(code), "otp_expires_at": expires.isoformat(),
         "otp_attempts": 0, "created_at": now_iso(), "kind": "login",
     })
-    logger.info(f"[OTP-LOGIN] phone={data.phone} code={code} (request_id={rid})")
-    resp = {"request_id": rid, "expires_in": OTP_TTL_SECONDS}
-    if DEV_OTP_PASSTHROUGH:
+    cur = await _get_integrations()
+    wa_ok, wa_err = await _send_otp_whatsapp(cur["whatsapp"], data.phone, code)
+    email_ok, email_err = await _send_otp_email(cur["smtp"], contact_email, code)
+    delivery = _otp_delivery_label(wa_ok, email_ok)
+    logger.info(f"[OTP-LOGIN] phone={data.phone} email={contact_email} code={code} delivery={delivery} (request_id={rid})")
+    resp: Dict[str, Any] = {"request_id": rid, "expires_in": OTP_TTL_SECONDS, "delivery": delivery}
+    if contact_email:
+        # Surface a masked hint to the UI so the user knows where to look
+        local, _, dom = contact_email.partition("@")
+        masked = (local[:2] + "•" * max(1, len(local) - 2)) + "@" + dom if dom else contact_email
+        resp["email_hint"] = masked
+    if wa_err: resp["whatsapp_error"] = wa_err
+    if email_err: resp["email_error"] = email_err
+    if DEV_OTP_PASSTHROUGH and not (wa_ok or email_ok):
         resp["dev_otp"] = code
     return resp
 
