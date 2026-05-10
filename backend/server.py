@@ -58,6 +58,12 @@ from services.dispatch import (
     dispatch_finalised_quote as _dispatch_finalised_quote,
     _now_dt,
 )
+# Phase C Tier 2 — contacts helpers (alias-imported so legacy callers stay valid)
+from services.contacts import (
+    norm_phone as _norm_phone,
+    norm_email as _norm_email,
+    find_contact_match as _find_contact_match,
+)
 
 
 # ---------- Setup ----------
@@ -91,120 +97,6 @@ async def root():
 
 # `/dashboard/stats` and `/public/stats` moved to routers/dashboard.py
 
-
-# ---------- Contacts (CRM) ----------
-class ContactIn(BaseModel):
-    name: str
-    company: Optional[str] = ""
-    phone: Optional[str] = ""
-    email: Optional[str] = ""
-    gst_number: Optional[str] = ""
-    billing_address: Optional[str] = ""
-    shipping_address: Optional[str] = ""
-    state: Optional[str] = ""
-    country: Optional[str] = "India"
-    source: Optional[str] = "manual"  # manual / expo / quotation / whatsapp
-    tags: List[str] = Field(default_factory=list)
-    notes: Optional[str] = ""
-
-
-def _norm_phone(s: Optional[str]) -> str:
-    if not s:
-        return ""
-    return "".join(ch for ch in s if ch.isdigit())[-10:]
-
-
-def _norm_email(s: Optional[str]) -> str:
-    return (s or "").strip().lower()
-
-
-async def _find_contact_match(phone: str, email: str) -> Optional[dict]:
-    p = _norm_phone(phone)
-    e = _norm_email(email)
-    if e:
-        c = await db.contacts.find_one({"email_norm": e}, {"_id": 0})
-        if c:
-            return c
-    if p:
-        c = await db.contacts.find_one({"phone_norm": p}, {"_id": 0})
-        if c:
-            return c
-    return None
-
-
-@api.get("/contacts")
-async def list_contacts(q: Optional[str] = None, source: Optional[str] = None, _: dict = Depends(get_current_user)):
-    query: Dict[str, Any] = {}
-    if source:
-        query["source"] = source
-    if q:
-        rx = re.escape(q)
-        query["$or"] = [
-            {"name": {"$regex": rx, "$options": "i"}},
-            {"company": {"$regex": rx, "$options": "i"}},
-            {"phone": {"$regex": rx, "$options": "i"}},
-            {"phone_norm": {"$regex": _norm_phone(q) or rx}},
-            {"email": {"$regex": rx, "$options": "i"}},
-        ]
-    items = await db.contacts.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
-    return items
-
-
-@api.get("/contacts/{cid}")
-async def get_contact(cid: str, _: dict = Depends(get_current_user)):
-    item = await db.contacts.find_one({"id": cid}, {"_id": 0})
-    if not item:
-        raise HTTPException(status_code=404, detail="Contact not found")
-    return item
-
-
-@api.post("/contacts")
-async def create_contact(data: ContactIn, user: dict = Depends(require_role("admin", "manager"))):
-    doc = data.model_dump()
-    doc["phone_norm"] = _norm_phone(doc.get("phone"))
-    doc["email_norm"] = _norm_email(doc.get("email"))
-    # Smart upsert: if phone or email already present, update existing
-    existing = await _find_contact_match(doc.get("phone", ""), doc.get("email", ""))
-    if existing:
-        upd = {k: v for k, v in doc.items() if v not in (None, "", []) or k in {"tags"}}
-        upd["updated_at"] = now_iso()
-        await db.contacts.update_one({"id": existing["id"]}, {"$set": upd})
-        item = await db.contacts.find_one({"id": existing["id"]}, {"_id": 0})
-        return item
-    doc["id"] = str(uuid.uuid4())
-    doc["created_at"] = now_iso()
-    doc["updated_at"] = now_iso()
-    doc["created_by"] = user["email"]
-    await db.contacts.insert_one(doc.copy())
-    doc.pop("_id", None)
-    return doc
-
-
-@api.put("/contacts/{cid}")
-async def update_contact(cid: str, data: ContactIn, user: dict = Depends(require_role("admin", "manager"))):
-    upd = data.model_dump()
-    upd["phone_norm"] = _norm_phone(upd.get("phone"))
-    upd["email_norm"] = _norm_email(upd.get("email"))
-    upd["updated_at"] = now_iso()
-    res = await db.contacts.update_one({"id": cid}, {"$set": upd})
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Contact not found")
-    item = await db.contacts.find_one({"id": cid}, {"_id": 0})
-    return item
-
-
-@api.delete("/contacts/{cid}")
-async def delete_contact(cid: str, _: dict = Depends(require_role("admin"))):
-    res = await db.contacts.delete_one({"id": cid})
-    if res.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Contact not found")
-    return {"ok": True}
-
-
-@api.get("/contacts/{cid}/quotations")
-async def contact_quotations(cid: str, _: dict = Depends(get_current_user)):
-    items = await db.quotations.find({"contact_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(500)
-    return items
 
 
 # ---------- Quotations ----------
@@ -2712,6 +2604,8 @@ from routers import pricing as _pricing_router  # noqa: E402
 # Phase C (Tier 1) — settings + webhooks
 from routers import settings as _settings_router  # noqa: E402
 from routers import webhooks as _webhooks_router  # noqa: E402
+# Phase C (Tier 2) — contacts
+from routers import contacts as _contacts_router  # noqa: E402
 
 api.include_router(_auth_router.router)
 api.include_router(_materials_router.router)
@@ -2722,6 +2616,7 @@ api.include_router(_variants_router.router)
 api.include_router(_pricing_router.router)
 api.include_router(_settings_router.router)
 api.include_router(_webhooks_router.router)
+api.include_router(_contacts_router.router)
 
 
 # Mount the API router AFTER all routes are registered

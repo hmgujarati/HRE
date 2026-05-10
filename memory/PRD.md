@@ -116,6 +116,13 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Phase C Tier 2 (contacts) — routers/contacts.py + services/contacts.py (2026-05-10)
+- Extracted `services/contacts.py` (35 lines) with `norm_phone`, `norm_email`, `find_contact_match` — used by both the contacts router AND public quote-request endpoints.
+- New `routers/contacts.py` (101 lines, 6 routes) — list (with q/source filters), get one, smart-upsert create (auto-merges on phone/email), update, delete, list quotations for a contact.
+- `server.py` 2728 → 2620 lines (-108 this phase, **-1958 cumulative**). Alias-imports preserve `_norm_phone`/`_norm_email`/`_find_contact_match` for the 6 callsites still in server.py (public OTP/quote-request endpoints) — no callsite rewrites needed.
+- Verification: backend boots cleanly. Curl tests: create → smart-upsert (same id returned) → list (6) → get → search by `q=phasec` → update with tags → quotations list → delete (ok=true). All pass. Contacts admin page screenshot renders identically. 95/96 phase 2 tests + 4/4 chatbot regression pass (1 unchanged pre-existing flake). Lint clean.
+- 10 routers now mounted; pattern fully proven for the remaining quotations + orders + public extractions in next sessions.
+
 ## Phase C Tier 1 Refactor — settings/webhooks → routers/, integrations+dispatch → services/ (2026-05-10)
 - Extracted 596 lines of integration glue into 2 services modules:
   - `services/integrations.py` (356 lines) — `get_integrations` + WhatsApp send (template/text/document/templates/status) + `send_smtp_email` + `normalise_phone` + OTP delivery (`hash_otp`, `send_otp_whatsapp`, `send_otp_email`, `otp_delivery_label`) + `mask_secret`/`public_integrations` + `DEFAULT_INTEGRATIONS`
