@@ -116,6 +116,16 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Phase C Tier 1 Refactor — settings/webhooks → routers/, integrations+dispatch → services/ (2026-05-10)
+- Extracted 596 lines of integration glue into 2 services modules:
+  - `services/integrations.py` (356 lines) — `get_integrations` + WhatsApp send (template/text/document/templates/status) + `send_smtp_email` + `normalise_phone` + OTP delivery (`hash_otp`, `send_otp_whatsapp`, `send_otp_email`, `otp_delivery_label`) + `mask_secret`/`public_integrations` + `DEFAULT_INTEGRATIONS`
+  - `services/dispatch.py` (240 lines) — `generate_quote_pdf` + `dispatch_finalised_quote` (the full WA + Email pipeline with HTML body, tracking pixel, dispatch_log persistence)
+- Extracted 2 routers: `routers/settings.py` (224 lines, 6 routes — settings GET/PUT, WA test/templates/sync, SMTP test, webhook-events), `routers/webhooks.py` (263 lines, 3 routes — bizchat/status consolidated, bizchat/inbound legacy shim, email/open GIF pixel).
+- `core.py` gained shared constants: `PUBLIC_BASE_URL`, `SELLER_INFO_EMAIL`, `OTP_TTL_SECONDS`, `OTP_MAX_ATTEMPTS`, `SESSION_TTL_DAYS`, `DEV_OTP_PASSTHROUGH`, `SETTINGS_DOC_ID`.
+- `server.py` 3751 → 2728 lines (-1023 this phase, **-1850 cumulative across A+B+C-Tier-1**). Legacy `_xxx` underscore names still resolve via alias-imports — no callsite rewrites needed.
+- The bot's `_bot_finalize_quote` stays in server.py for now; webhooks router late-imports it (`from server import _bot_finalize_quote` inside the handler) to avoid a circular dep.
+- Verification: backend boots cleanly, all 9 routers mounted (Phase A+B+C-Tier-1). Curl tests: settings/integrations GET returns shape (whatsapp.enabled + masked token + webhook_url) ✓; settings/whatsapp/templates forwards to BizChat ✓; webhook-events returns 20 ✓; bizchat/status?secret= GET health-check returns OK ✓; email/open returns 43-byte GIF ✓. Smoke screenshot of `/settings` renders the full BizChat tab unchanged. Lint clean. 95/96 phase 2 tests + 4/4 chatbot regression tests pass (1 unchanged pre-existing flake).
+
 ## Phase B Refactor — families/variants/pricing → routers/ + services/pricing.py (2026-05-10)
 - Extracted `services/pricing.py` (170 lines) with the price-history audit (`record_price_history`), bulk-discount apply (`apply_bulk_discount`), and Excel parsing helpers (`parse_variant_workbook`, `classify_header`, `norm`, `norm_code`, `is_number`). Lives outside `routers/` so multiple routers can share it cleanly.
 - New routers: `routers/families.py` (227 lines, 8 routes — CRUD + 3 image uploads + Excel variant import), `routers/variants.py` (101 lines, 6 routes — CRUD + single-variant + global price history), `routers/pricing.py` (168 lines, 5 routes — bulk-discount + preview + Excel price import).

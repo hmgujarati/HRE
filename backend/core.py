@@ -31,6 +31,17 @@ load_dotenv(ROOT_DIR / ".env")
 UPLOAD_DIR = ROOT_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+# Frequently referenced env / shared constants
+PUBLIC_BASE_URL: str = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+SELLER_INFO_EMAIL: str = "info@hrexporter.com"
+
+# OTP / public-quote-portal constants
+OTP_TTL_SECONDS = 10 * 60
+OTP_MAX_ATTEMPTS = 5
+SESSION_TTL_DAYS = 30
+DEV_OTP_PASSTHROUGH: bool = os.environ.get("DEV_OTP_PASSTHROUGH", "true").lower() == "true"
+SETTINGS_DOC_ID = "integrations"
+
 # ---------- MongoDB ----------
 mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
@@ -177,7 +188,10 @@ class BulkDiscountIn(BaseModel):
 
 
 __all__ = [
-    "ROOT_DIR", "UPLOAD_DIR", "client", "db",
+    "ROOT_DIR", "UPLOAD_DIR", "PUBLIC_BASE_URL", "SELLER_INFO_EMAIL",
+    "OTP_TTL_SECONDS", "OTP_MAX_ATTEMPTS", "SESSION_TTL_DAYS",
+    "DEV_OTP_PASSTHROUGH", "SETTINGS_DOC_ID",
+    "client", "db",
     "JWT_SECRET", "JWT_ALGO", "JWT_EXP_HOURS",
     "now_iso", "hash_password", "verify_password", "create_token",
     "calc_final_price", "get_current_user", "require_role",
