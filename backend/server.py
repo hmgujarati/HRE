@@ -2278,16 +2278,16 @@ async def _bot_finalize_quote(*, line_items: List[Dict[str, Any]], customer: Dic
         v = await db.product_variants.find_one({"id": li["variant_id"]}, {"_id": 0})
         if not v:
             continue
-        unit_price = float(li.get("unit_price") or v.get("price") or 0)
+        unit_price = float(li.get("unit_price") or v.get("final_price") or 0)
         qty = int(li.get("qty") or 1)
         line_total = unit_price * qty
         enriched_lines.append({
             "id": str(uuid.uuid4()),
             "variant_id": v["id"],
-            "variant_code": v.get("code") or "",
-            "variant_name": v.get("name") or "",
-            "family_id": v.get("family_id"),
-            "family_name": (await db.product_families.find_one({"id": v.get("family_id")}, {"_id": 0, "name": 1}) or {}).get("name", ""),
+            "variant_code": v.get("product_code") or "",
+            "variant_name": v.get("product_name") or "",
+            "family_id": v.get("product_family_id"),
+            "family_name": (await db.product_families.find_one({"id": v.get("product_family_id")}, {"_id": 0, "family_name": 1}) or {}).get("family_name", ""),
             "qty": qty,
             "unit_price": unit_price,
             "discount_pct": 0,

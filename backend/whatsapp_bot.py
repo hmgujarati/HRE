@@ -322,11 +322,18 @@ def _matches_handoff(text: str) -> bool:
 
 
 async def _send_family_list(wa: dict, db, phone: str):
-    families = await db.product_families.find({}, {"_id": 0, "id": 1, "name": 1, "material_id": 1}).limit(10).to_list(10)
+    families = await db.product_families.find(
+        {"active": True},
+        {"_id": 0, "id": 1, "family_name": 1, "short_name": 1, "product_type": 1, "material_id": 1},
+    ).sort("family_name", 1).limit(10).to_list(10)
     if not families:
         await _safe_send(send_text(wa, phone, "Our catalog is being updated. Please contact our sales team for a quote."), phone, "no_families")
         return False
-    rows = [{"id": f"fam:{f['id']}", "title": (f.get("name") or "Family")[:24], "description": ""} for f in families]
+    rows = []
+    for f in families:
+        title = (f.get("short_name") or f.get("family_name") or "Family").strip()
+        desc = (f.get("product_type") or f.get("family_name") or "").strip()
+        rows.append({"id": f"fam:{f['id']}", "title": title[:24], "description": desc[:72] or "Tap to select"})
     await _safe_send(send_list(
         wa, phone,
         body_text="Please select the product family you're looking for:",
@@ -338,16 +345,28 @@ async def _send_family_list(wa: dict, db, phone: str):
 
 
 async def _send_variant_list(wa: dict, db, phone: str, family_id: str):
-    variants = await db.product_variants.find({"family_id": family_id}, {"_id": 0, "id": 1, "name": 1, "code": 1, "price": 1}).limit(10).to_list(10)
+    variants = await db.product_variants.find(
+        {"product_family_id": family_id, "active": True},
+        {"_id": 0, "id": 1, "product_name": 1, "product_code": 1, "final_price": 1,
+         "cable_size": 1, "hole_size": 1, "size": 1},
+    ).sort("product_code", 1).limit(10).to_list(10)
     if not variants:
         await _safe_send(send_text(wa, phone, "No variants available for this family. Try a different one — type 'menu' to start over."), phone, "no_variants")
         return False
     rows = []
     for v in variants:
-        title = (v.get("name") or v.get("code") or "Variant")[:24]
-        price = float(v.get("price") or 0)
-        desc = f"₹{price:,.0f}/unit · code {v.get('code', '')}"[:72]
-        rows.append({"id": f"var:{v['id']}", "title": title, "description": desc})
+        title = (v.get("product_code") or v.get("product_name") or "Variant").strip()
+        price = float(v.get("final_price") or 0)
+        size_bits = []
+        if v.get("cable_size"): size_bits.append(str(v["cable_size"]).strip())
+        if v.get("hole_size"): size_bits.append(f"⌀{str(v['hole_size']).strip()}")
+        elif v.get("size"): size_bits.append(str(v["size"]))
+        size_label = " · ".join(size_bits)
+        if price > 0:
+            desc = (f"₹{price:,.2f}/unit" + (f" · {size_label}" if size_label else "")).strip()
+        else:
+            desc = size_label or "Tap to select"
+        rows.append({"id": f"var:{v['id']}", "title": title[:24], "description": desc[:72]})
     await _safe_send(send_list(
         wa, phone,
         body_text="Pick the variant you'd like to quote:",
@@ -521,9 +540,12 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
         if sel.startswith("var:"):
             variant_id = sel[4:]
             ctx["current_variant_id"] = variant_id
-            v = await db.product_variants.find_one({"id": variant_id}, {"_id": 0, "name": 1, "price": 1})
-            ctx["current_variant_name"] = v.get("name") if v else "variant"
-            ctx["current_variant_price"] = float(v.get("price") or 0) if v else 0
+            v = await db.product_variants.find_one(
+                {"id": variant_id},
+                {"_id": 0, "product_name": 1, "product_code": 1, "final_price": 1},
+            )
+            ctx["current_variant_name"] = (v.get("product_code") or v.get("product_name") or "variant") if v else "variant"
+            ctx["current_variant_price"] = float(v.get("final_price") or 0) if v else 0
             await _safe_send(send_text(wa, phone,
                             f"How many units of *{ctx['current_variant_name']}* "
                             f"(₹{ctx['current_variant_price']:,.0f}/unit) do you need?\n\n"
