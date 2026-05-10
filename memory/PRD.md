@@ -277,3 +277,24 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 ## Test Status
 - Backend: 29/29 Phase 2B/2C + 34/34 Phase 2A regression passing (iteration_3.json, 2026-05-06)
 - Frontend: login renders post Emergent-branding removal (smoke tested)
+
+
+## Backend Refactor — Phase A/B/C Modularization — COMPLETED (2026-05-10)
+- `server.py` reduced from ~4500 lines → ~1278 lines. All domain endpoints now live in modular routers + services.
+- Routers (`/app/backend/routers/`): auth, materials, categories, dashboard, families, variants, pricing, settings, webhooks, contacts, quotations, **orders** (final piece — landed 2026-05-10).
+- Services (`/app/backend/services/`): pricing, integrations, dispatch, contacts, quote_helpers.
+- Orders router holds all 15 endpoints: from-quote, list, get, advance, expected-completion, production-update, raw-material, upload-po, proforma/generate, proforma/upload, invoice/generate, upload-dispatch, upload-lr, refire-notification, delete.
+- Shared helpers `STAGE_ORDER`, `STAGE_TO_LABEL`, `mint_order_from_quote`, `next_order_number`, `next_pi_number`, `timeline_event`, `order_auto_notify`, `persist_order_notification`, `save_order_doc` consolidated into `services/dispatch.py`; legacy callers in `server.py` (`_bot_finalize_quote`, `public_submit_po`, `_public_order_summary`) updated via alias imports.
+- Regression testing (2026-05-10): new `test_orders_router_refactor.py` (19/19 pass), Phase 2B/2C dispatch+orders 28/29 (1 known seeded-state flake `test_advance_through_production_stages`), Phase 2A quotations 34/34, Phase 2D public-PO 18/18, WhatsApp bot flow 4/4, Phase 2E OTP 11/11. No new regressions.
+
+## Backlog (post-refactor)
+- P1: Hot Leads dashboard widget (quotes Read but not acted on)
+- P2: Customer PO acknowledgement (auto WA/Email reply when customer uploads a PO)
+- P2: Public `/track/{order#}` deep-link
+- P2: Customer 360 side-panel endpoint (contact + last 5 quotes + last 3 orders + WA engagement in one call)
+- P3: Brute-force lockout in routers/auth.py (5 failed → 15-min cooldown)
+- P3: `/api/health/integrations` endpoint (pings BizChat + Hostinger SMTP)
+- P3: "Copy / Share to WhatsApp" buttons on Variants UI
+- P3: `/api/quotations/{qid}/diff/{revision_id}` revision-diff endpoint
+- Hygiene: fix pre-existing flakes — `test_advance_through_production_stages` (seeded order missing dispatch docs) and `test_hre_crm_backend.py` family/dashboard tests (DB only has 1 family vs expected ≥3)
+- Hygiene: replace `@app.on_event("startup"/"shutdown")` with FastAPI lifespan handlers (deprecation warnings)
