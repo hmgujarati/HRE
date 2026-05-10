@@ -4,7 +4,7 @@ import pytest
 import requests
 from typing import Dict, Any
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://b2b-order-hub-11.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://hre-crm-phase2.preview.emergentagent.com").rstrip("/")
 # Read frontend env to be source of truth
 try:
     with open("/app/frontend/.env") as f:

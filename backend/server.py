@@ -2171,6 +2171,33 @@ async def bizchat_status_webhook(request: Request, secret: Optional[str] = None)
         "payload": raw,
     })
 
+    # ── Detect & route INBOUND customer messages ──
+    # BizChat funnels inbound messages through the same webhook. Their shape is:
+    # { contact: { phone_number, first_name }, message: { body, is_new_message: true,
+    #   status: null, whatsapp_message_id } }
+    # When status==null and body is non-empty it's an inbound message, not a status event.
+    body_obj = raw if isinstance(raw, dict) else {}
+    msg_obj = body_obj.get("message") or {}
+    contact_obj = body_obj.get("contact") or {}
+    looks_inbound = (
+        isinstance(msg_obj, dict)
+        and (msg_obj.get("is_new_message") is True)
+        and (msg_obj.get("body") or msg_obj.get("interactive") or msg_obj.get("type") == "interactive")
+    )
+    if looks_inbound:
+        try:
+            msg = bot_parse_inbound(raw)
+            if msg and msg.get("phone"):
+                bot_result = await bot_dispatch(
+                    db=db, wa=cur["whatsapp"], sm=cur["smtp"], settings_doc=cur,
+                    msg=msg, builder_fn=_bot_finalize_quote,
+                )
+                logger.info(f"[bot] handled inbound from {msg['phone']} → {bot_result.get('state')}")
+                return {"ok": True, "kind": "inbound", "bot_state": bot_result.get("state")}
+        except Exception:
+            logger.exception("[bot] dispatch failed on status-webhook inbound")
+        return {"ok": True, "kind": "inbound", "bot_state": "error"}
+
     STATUS_RANK = {"accepted": 1, "sent": 2, "delivered": 3, "read": 4, "failed": 5, "pending": 0}
     updated = 0
     for ev in events:

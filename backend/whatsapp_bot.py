@@ -144,7 +144,33 @@ def parse_inbound(payload: dict) -> Optional[Dict[str, Any]]:
     """
     if not isinstance(payload, dict):
         return None
-    # Walk down common wrappers but capture `from` along the way
+
+    # Shape 1 (real BizChat inbound): { contact: { phone_number }, message: { body, interactive, ... } }
+    contact_obj = payload.get("contact")
+    msg_obj = payload.get("message")
+    if isinstance(contact_obj, dict) and isinstance(msg_obj, dict):
+        from_phone = contact_obj.get("phone_number") or contact_obj.get("phone")
+        if from_phone:
+            wamid = msg_obj.get("whatsapp_message_id") or msg_obj.get("wamid") or msg_obj.get("id")
+            text = (msg_obj.get("body") or "").strip()
+            selection_id = ""
+            inter = msg_obj.get("interactive")
+            if isinstance(inter, dict):
+                if isinstance(inter.get("button_reply"), dict):
+                    selection_id = inter["button_reply"].get("id") or ""
+                    text = inter["button_reply"].get("title") or text
+                elif isinstance(inter.get("list_reply"), dict):
+                    selection_id = inter["list_reply"].get("id") or ""
+                    text = inter["list_reply"].get("title") or text
+            return {
+                "phone": str(from_phone),
+                "phone_norm": _norm_phone_local(str(from_phone)),
+                "text": (text or "").strip(),
+                "selection_id": (selection_id or "").strip(),
+                "wamid": wamid,
+            }
+
+    # Shape 2 (Meta-style or our test fixtures): walk wrappers
     body = payload
     from_phone = None
     for key in ("data", "payload", "event"):
@@ -154,14 +180,12 @@ def parse_inbound(payload: dict) -> Optional[Dict[str, Any]]:
                       or from_phone)
         if isinstance(body.get(key), dict):
             body = body[key]
-    # Final pass on the innermost
     from_phone = (body.get("from") or body.get("phone_number")
                   or body.get("contact_phone")
                   or (body.get("contact") or {}).get("phone")
                   or from_phone)
     if not from_phone:
         return None
-    # Message id
     wamid = body.get("wamid") or body.get("id") or body.get("message_id") or payload.get("wamid")
     # Text + selection
     text: Optional[str] = None
