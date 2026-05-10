@@ -28,6 +28,9 @@ from pydantic import BaseModel, EmailStr, ConfigDict, Field
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+UPLOAD_DIR = ROOT_DIR / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+
 # ---------- MongoDB ----------
 mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
@@ -174,7 +177,7 @@ class BulkDiscountIn(BaseModel):
 
 
 __all__ = [
-    "ROOT_DIR", "client", "db",
+    "ROOT_DIR", "UPLOAD_DIR", "client", "db",
     "JWT_SECRET", "JWT_ALGO", "JWT_EXP_HOURS",
     "now_iso", "hash_password", "verify_password", "create_token",
     "calc_final_price", "get_current_user", "require_role",

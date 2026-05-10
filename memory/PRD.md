@@ -116,6 +116,13 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Phase B Refactor — families/variants/pricing → routers/ + services/pricing.py (2026-05-10)
+- Extracted `services/pricing.py` (170 lines) with the price-history audit (`record_price_history`), bulk-discount apply (`apply_bulk_discount`), and Excel parsing helpers (`parse_variant_workbook`, `classify_header`, `norm`, `norm_code`, `is_number`). Lives outside `routers/` so multiple routers can share it cleanly.
+- New routers: `routers/families.py` (227 lines, 8 routes — CRUD + 3 image uploads + Excel variant import), `routers/variants.py` (101 lines, 6 routes — CRUD + single-variant + global price history), `routers/pricing.py` (168 lines, 5 routes — bulk-discount + preview + Excel price import).
+- `core.py` gained `UPLOAD_DIR` constant (used by family image-save helper).
+- `server.py` 4333 → 3751 lines (-582 lines this phase, -827 cumulative across A+B). 19 new routes mounted; total 7 routers in Phase A+B.
+- Verification: backend boots cleanly. End-to-end curl: list families ✓, get family ✓, list 104 variants ✓, get variant ✓, price-history ✓, bulk-discount preview ✓. UI screenshots: `/product-families` list shows family card; `/product-families/{id}` shows detail with all 104 variants with prices/dimensions. TestAuth/TestMaterials/TestCategories/TestProductFamilies CRUD/TestProductVariants CRUD/TestBulkDiscount/TestPriceHistory + chatbot regression all pass (24/30 in test_hre_crm_backend.py — the 6 failures are the same pre-existing seed-data assertions unchanged by the refactor).
+
 ## Phase A Refactor — auth/materials/categories/dashboard → routers/ (2026-05-10)
 - Established the modular-router pattern: shared infra moved to `/app/backend/core.py` (db handle, JWT helpers, `get_current_user`/`require_role` deps, common Pydantic models — `LoginIn`/`MaterialIn`/`CategoryIn`/`ProductFamilyIn`/`ProductVariantIn`/`BulkDiscountIn`).
 - New `routers/` package with 4 modules: `auth.py`, `materials.py`, `categories.py`, `dashboard.py` (13 routes total — all admin/public CRUD + stats).
