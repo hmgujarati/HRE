@@ -116,6 +116,14 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Phase C Tier 2 (quotations) — routers/quotations.py + services/quote_helpers.py (2026-05-10)
+- Extracted `services/quote_helpers.py` (64 lines) — `fy_label`, `next_quote_number` (FY-bucketed Mongo counter), `compute_quote_totals` (line gross/discount/taxable/GST/total + roll-up).
+- New `routers/quotations.py` (315 lines, **11 routes**): list (status/contact/q filters), next-number preview, get, create, update (blocked on approved/rejected), patch-status, revise (clones into v(N+1)), delete, send (manual dispatch via `services/dispatch.py`), refresh-delivery (BizChat status poller), pdf, dashboard/quote-stats, convert-to-order (late-imports `create_order_from_quote` from server.py to avoid circular dep with orders, which is still in server.py).
+- `server.py` 2620 → 2284 lines (-336 this phase, **-2294 cumulative**). Alias-imports preserve `_compute_quote_totals` / `_next_quote_number` / `_fy_label` for the 4 callsites still in server.py (`_bot_finalize_quote` + public OTP-driven quote endpoint).
+- Verification: backend boots cleanly. End-to-end curl: list (8 quotes) → next-number preview → get → quote-stats (pipeline ₹10,553) → refresh-delivery → POST create (totals math correct: qty 10 × ₹100.5 + 18% GST = ₹1185.9) → revise (auto-suffixed `-R2`, parent linked) → delete. Quotations admin page screenshot renders identically with full stat cards, READ/OPENED delivery pills, all 9 quotes intact.
+- Tests: 4/4 chatbot regression + 95/96 phase 2 pass (1 unchanged pre-existing flake). Lint clean.
+- 11 routers now mounted; remaining: orders + public catalogue (Phase C Tier 2 final).
+
 ## Phase C Tier 2 (contacts) — routers/contacts.py + services/contacts.py (2026-05-10)
 - Extracted `services/contacts.py` (35 lines) with `norm_phone`, `norm_email`, `find_contact_match` — used by both the contacts router AND public quote-request endpoints.
 - New `routers/contacts.py` (101 lines, 6 routes) — list (with q/source filters), get one, smart-upsert create (auto-merges on phone/email), update, delete, list quotations for a contact.
