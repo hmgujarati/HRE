@@ -116,6 +116,21 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## WhatsApp Inbound Bot v1 (2026-05-10)
+- New module `/app/backend/whatsapp_bot.py` with state machine + outbound send helpers (text / button / list)
+- Endpoint `POST /api/webhooks/bizchat/inbound` receives BizChat customer-message webhook payloads
+- Permissive parser handles standard Meta shapes (text, button_reply, list_reply) — every raw payload logged to `webhook_events` collection for debugging
+- 8-state conversation: WELCOME → ASK_NAME → ASK_EMAIL → ASK_COMPANY → BROWSE_FAMILY → PICK_VARIANT → ASK_QTY → ADD_MORE → CONFIRM → FINALIZED
+- Persists to `chatbot_sessions` collection with full transcript + 30-min idle TTL
+- New customers auto-saved to `contacts` collection with `source: whatsapp_bot`
+- Returning customers auto-detected (tolerant phone match — handles 91-prefix variations)
+- Quote finalization calls `_bot_finalize_quote` which builds line items with `unit_price` from variants table, generates PDF via WeasyPrint, dispatches via existing `_dispatch_finalised_quote` (so customer gets PDF on WA + Email + sees it in `/my-quotes`)
+- Handoff keywords (sales/human/agent/complaint/refund/urgent) at any state → bot sends admin's phone (`whatsapp.admin_notify_phone`) and ends session
+- "About HRE" reply → link to https://hrexporter.com/about-hr-exporter/
+- All outbound sends wrapped in `_safe_send` so transient BizChat errors don't break state machine
+- BizChat list rows require `description` field to be non-empty — defaulted to "Tap to select"
+- Live-tested with simulated webhooks: button_reply correctly routed, list_reply correctly routed, contact lookup tolerant, sessions persisted, transcript recorded
+
 ## ETA Nudge + Email Retry Queue (2026-05-10)
 - **ETA Nudge** on Orders list: amber banner counts in-flight orders missing an Expected Completion Date; new "ETA" column shows the date in green, or a clickable amber "Set ETA" link for in-flight rows that don't have one. Whole row tints amber for missing-ETA orders. In-flight = stage > pending_po and < delivered.
 - **Email Retry Queue** with exponential backoff (30s → 2m → 10m, max 3 attempts):

@@ -2218,6 +2218,133 @@ async def recent_webhook_events(_: dict = Depends(require_role("admin", "manager
     return await cur.to_list(length=20)
 
 
+# ────────────────────────── WhatsApp Inbound Bot ──────────────────────────
+from whatsapp_bot import dispatch as bot_dispatch, parse_inbound as bot_parse_inbound
+
+
+async def _bot_finalize_quote(*, line_items: List[Dict[str, Any]], customer: Dict[str, Any], source: str) -> dict:
+    """Build + persist a finalized Quotation from bot-collected line items.
+    Returns the saved quote dict. Reuses existing dispatch infra so the customer
+    receives PDF on WhatsApp + Email exactly like the website flow."""
+    if not line_items:
+        raise HTTPException(status_code=400, detail="No items to quote")
+    phone = customer.get("phone") or ""
+    phone_norm = "".join(ch for ch in phone if ch.isdigit())
+    contact = await db.contacts.find_one({"phone_norm": phone_norm}, {"_id": 0})
+    if not contact:
+        # Create contact (was already done in bot for new users; safety net)
+        contact = {
+            "id": str(uuid.uuid4()),
+            "name": customer.get("name") or "Bot Customer",
+            "email": customer.get("email") or "",
+            "company": customer.get("company") or "",
+            "phone": phone,
+            "phone_norm": phone_norm,
+            "created_at": now_iso(),
+            "source": "whatsapp_bot",
+        }
+        await db.contacts.insert_one(contact)
+
+    # Hydrate line items: variant lookup → enriched quote line
+    enriched_lines: List[Dict[str, Any]] = []
+    for li in line_items:
+        v = await db.product_variants.find_one({"id": li["variant_id"]}, {"_id": 0})
+        if not v:
+            continue
+        unit_price = float(li.get("unit_price") or v.get("price") or 0)
+        qty = int(li.get("qty") or 1)
+        line_total = unit_price * qty
+        enriched_lines.append({
+            "id": str(uuid.uuid4()),
+            "variant_id": v["id"],
+            "variant_code": v.get("code") or "",
+            "variant_name": v.get("name") or "",
+            "family_id": v.get("family_id"),
+            "family_name": (await db.product_families.find_one({"id": v.get("family_id")}, {"_id": 0, "name": 1}) or {}).get("name", ""),
+            "qty": qty,
+            "unit_price": unit_price,
+            "discount_pct": 0,
+            "tax_pct": 18,
+            "line_total": line_total,
+        })
+    grand_total = sum(li["line_total"] for li in enriched_lines)
+    qno = await _next_quote_number()
+    quote = {
+        "id": str(uuid.uuid4()),
+        "quote_number": qno,
+        "contact_id": contact["id"],
+        "contact_name": contact.get("name"),
+        "contact_company": contact.get("company"),
+        "contact_email": contact.get("email"),
+        "contact_phone": contact.get("phone"),
+        "contact_billing_address": contact.get("billing_address") or "",
+        "contact_shipping_address": contact.get("shipping_address") or "",
+        "line_items": enriched_lines,
+        "subtotal": grand_total,
+        "discount_total": 0,
+        "tax_total": 0,
+        "grand_total": grand_total,
+        "status": "draft",
+        "valid_until": (datetime.now(timezone.utc) + timedelta(days=15)).date().isoformat(),
+        "notes": f"Auto-generated via WhatsApp bot on {datetime.now().strftime('%d-%m-%Y %H:%M')}",
+        "terms": "Prices are exclusive of freight unless specified.\nValidity: 15 days.\n50% advance with PO.",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "created_by": "whatsapp_bot",
+        "source": source,
+        "dispatch_log": [],
+    }
+    await db.quotations.insert_one(quote)
+    # Trigger the same dispatch pipeline (PDF + WA + Email)
+    try:
+        delivery = await _dispatch_finalised_quote(quote)
+        if delivery.get("pdf") or delivery.get("whatsapp") or delivery.get("email"):
+            await db.quotations.update_one(
+                {"id": quote["id"]},
+                {"$set": {"sent_at": now_iso(), "status": "sent"}},
+            )
+            quote["status"] = "sent"
+    except Exception:
+        logger.exception(f"[bot-finalize] dispatch failed for {qno}")
+    # Re-fetch fresh
+    fresh = await db.quotations.find_one({"id": quote["id"]}, {"_id": 0})
+    return fresh or quote
+
+
+@api.post("/webhooks/bizchat/inbound")
+async def bizchat_inbound_webhook(request: Request):
+    raw = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {"raw": (await request.body()).decode("utf-8", errors="replace")}
+    try:
+        await db.webhook_events.insert_one({
+            "id": str(uuid.uuid4()),
+            "kind": "inbound",
+            "received_at": now_iso(),
+            "payload": raw,
+        })
+    except Exception:
+        pass
+    msg = bot_parse_inbound(raw)
+    if not msg or not msg.get("phone"):
+        logger.warning(f"[bot-in] could not parse inbound: {raw}")
+        return {"ok": True, "parsed": False}
+    settings = await _get_integrations()
+    wa = settings["whatsapp"]
+    sm = settings["smtp"]
+    if not (wa.get("vendor_uid") and wa.get("token")):
+        logger.error("[bot-in] WhatsApp not configured; ignoring inbound")
+        return {"ok": True, "parsed": True, "skipped": "wa_not_configured"}
+    # Persist transcript inbound
+    try:
+        result = await bot_dispatch(
+            db=db, wa=wa, sm=sm, settings_doc=settings,
+            msg=msg, builder_fn=_bot_finalize_quote,
+        )
+        return {"ok": True, "parsed": True, "result": result}
+    except Exception as e:
+        logger.exception("[bot-in] dispatch failed")
+        return {"ok": True, "parsed": True, "error": str(e)}
+
+
 # 1×1 transparent GIF served by the email-open endpoint
 _OPEN_PIXEL_GIF = bytes.fromhex(
     "47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b"
