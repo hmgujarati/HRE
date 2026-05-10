@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
-import { MagnifyingGlass, Storefront } from "@phosphor-icons/react";
+import { MagnifyingGlass, Storefront, Calendar, Warning } from "@phosphor-icons/react";
 import api, { formatApiError } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import { toast } from "sonner";
@@ -68,11 +68,34 @@ export default function Orders() {
   useEffect(() => { load(); }, [stage]);  // eslint-disable-line
   useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [q]);  // eslint-disable-line
 
+  // In-flight = anything past pending_po and before delivered
+  const inFlightWithoutEta = useMemo(() => {
+    return items.filter((o) => {
+      const idx = STAGE_ORDER.indexOf(o.stage);
+      const isInFlight = idx > 0 && idx < STAGE_ORDER.indexOf("delivered");
+      return isInFlight && !o.expected_completion_date;
+    });
+  }, [items]);
+
   return (
     <div className="animate-fade-in">
       <PageHeader eyebrow="Operations" title="Orders" subtitle="Track every approved order from PO → Dispatch → LR." testId="orders-header" />
 
       <div className="px-4 sm:px-8 py-4">
+        {inFlightWithoutEta.length > 0 && (
+          <div className="mb-4 border border-amber-300 bg-amber-50 p-4 flex items-start gap-3" data-testid="missing-eta-banner">
+            <Warning size={18} weight="fill" className="text-amber-600 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="font-bold text-sm text-amber-900">
+                {inFlightWithoutEta.length} in-flight order{inFlightWithoutEta.length === 1 ? "" : "s"} {inFlightWithoutEta.length === 1 ? "is" : "are"} missing an Expected Completion Date
+              </div>
+              <div className="text-xs text-amber-800 mt-0.5">
+                Customers won't see an ETA in their WhatsApp + Email updates until you set this. Click an order below (yellow row) and use the "Expected Completion" card.
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-6">
           <div className="relative flex-1 sm:max-w-md">
             <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
@@ -104,35 +127,57 @@ export default function Orders() {
                 <th className="px-4 sm:px-6 py-3">Quote</th>
                 <th className="px-4 sm:px-6 py-3">PO #</th>
                 <th className="px-4 sm:px-6 py-3">Stage</th>
+                <th className="px-4 sm:px-6 py-3">ETA</th>
                 <th className="px-4 sm:px-6 py-3">Updated</th>
                 <th className="px-4 sm:px-6 py-3 text-right">Total ₹</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={7} className="px-6 py-12 text-center text-zinc-400">Loading…</td></tr>
+                <tr><td colSpan={8} className="px-6 py-12 text-center text-zinc-400">Loading…</td></tr>
               ) : items.length === 0 ? (
-                <tr><td colSpan={7} className="px-6 py-16 text-center text-zinc-400">
+                <tr><td colSpan={8} className="px-6 py-16 text-center text-zinc-400">
                   <Storefront size={36} weight="thin" className="mx-auto mb-2 text-zinc-300" />
                   <div className="font-heading font-black text-lg mb-1 text-zinc-600">No orders yet</div>
                   <div className="text-xs">Approve a quotation, then click <strong>Convert to Order</strong> to start tracking.</div>
                 </td></tr>
-              ) : items.map((o) => (
-                <tr key={o.id} className="border-t border-zinc-100 hover:bg-zinc-50/60" data-testid={`order-row-${o.id}`}>
-                  <td className="px-4 sm:px-6 py-3 font-mono font-bold">
-                    <Link to={`/orders/${o.id}`} className="hover:text-[#FBAE17]" data-testid={`order-link-${o.id}`}>{o.order_number}</Link>
-                  </td>
-                  <td className="px-4 sm:px-6 py-3">
-                    <div className="font-medium text-[#1A1A1A]">{o.contact_name}</div>
-                    {o.contact_company && <div className="text-xs text-zinc-500">{o.contact_company}</div>}
-                  </td>
-                  <td className="px-4 sm:px-6 py-3 font-mono text-xs text-zinc-500">{o.quote_number || "—"}</td>
-                  <td className="px-4 sm:px-6 py-3 font-mono text-xs">{o.po_number || <span className="text-zinc-300">—</span>}</td>
-                  <td className="px-4 sm:px-6 py-3"><StageBadge stage={o.stage} /></td>
-                  <td className="px-4 sm:px-6 py-3 text-xs font-mono text-zinc-500">{new Date(o.updated_at).toLocaleDateString()}</td>
-                  <td className="px-4 sm:px-6 py-3 text-right font-mono font-bold">₹{(o.grand_total || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                </tr>
-              ))}
+              ) : items.map((o) => {
+                const idx = STAGE_ORDER.indexOf(o.stage);
+                const isInFlight = idx > 0 && idx < STAGE_ORDER.indexOf("delivered");
+                const missingEta = isInFlight && !o.expected_completion_date;
+                const etaDisplay = o.expected_completion_date
+                  ? new Date(o.expected_completion_date + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short" })
+                  : "";
+                return (
+                  <tr key={o.id} className={`border-t border-zinc-100 hover:bg-zinc-50/60 ${missingEta ? "bg-amber-50/40" : ""}`} data-testid={`order-row-${o.id}`}>
+                    <td className="px-4 sm:px-6 py-3 font-mono font-bold">
+                      <Link to={`/orders/${o.id}`} className="hover:text-[#FBAE17]" data-testid={`order-link-${o.id}`}>{o.order_number}</Link>
+                    </td>
+                    <td className="px-4 sm:px-6 py-3">
+                      <div className="font-medium text-[#1A1A1A]">{o.contact_name}</div>
+                      {o.contact_company && <div className="text-xs text-zinc-500">{o.contact_company}</div>}
+                    </td>
+                    <td className="px-4 sm:px-6 py-3 font-mono text-xs text-zinc-500">{o.quote_number || "—"}</td>
+                    <td className="px-4 sm:px-6 py-3 font-mono text-xs">{o.po_number || <span className="text-zinc-300">—</span>}</td>
+                    <td className="px-4 sm:px-6 py-3"><StageBadge stage={o.stage} /></td>
+                    <td className="px-4 sm:px-6 py-3 text-xs">
+                      {etaDisplay ? (
+                        <span className="inline-flex items-center gap-1 font-mono font-bold text-emerald-700">
+                          <Calendar size={11} weight="bold" /> {etaDisplay}
+                        </span>
+                      ) : missingEta ? (
+                        <Link to={`/orders/${o.id}`} className="inline-flex items-center gap-1 text-amber-700 hover:text-amber-900 font-bold text-[10px] uppercase tracking-wider" data-testid={`eta-missing-${o.id}`}>
+                          <Warning size={11} weight="fill" /> Set ETA
+                        </Link>
+                      ) : (
+                        <span className="text-zinc-300">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 sm:px-6 py-3 text-xs font-mono text-zinc-500">{new Date(o.updated_at).toLocaleDateString()}</td>
+                    <td className="px-4 sm:px-6 py-3 text-right font-mono font-bold">₹{(o.grand_total || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

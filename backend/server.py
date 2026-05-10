@@ -8,6 +8,7 @@ import os
 import re
 import uuid
 import shutil
+import asyncio
 import logging
 from io import BytesIO
 from datetime import datetime, timezone, timedelta
@@ -3291,8 +3292,18 @@ async def _order_auto_notify(order: dict, stage: str):
             result["email_open_token"] = open_token
             result["email_status"] = "sent"
         except Exception as e:
-            logger.exception(f"[Order notify] stage={stage} email failed")
-            result["email_error"] = str(e)
+            err = str(e)[:300]
+            logger.exception(f"[Order notify] stage={stage} email failed; queuing retry")
+            result["email_error"] = err
+            result["email_open_token"] = open_token
+            result["email_retry_attempt"] = 1
+            result["_retry_payload"] = {
+                "to_email": email,
+                "subject": subject,
+                "body_text": body_text,
+                "body_html": body_html,
+                "attach_paths": [str(p) for p in attach_paths] if attach_paths else None,
+            }
 
     # If nothing actually went out, return None to keep notifications log clean
     if not (result["whatsapp"] or result["email"] or result.get("whatsapp_error") or result.get("email_error")):
@@ -3462,7 +3473,7 @@ async def advance_order_stage(oid: str, data: OrderAdvanceIn, user: dict = Depen
     if notify:
         notify["stage"] = new_stage
         notify["at"] = now_iso()
-        await db.orders.update_one({"id": oid}, {"$push": {"notifications": notify}})
+        await _persist_order_notification(oid, notify)
     updated = await db.orders.find_one({"id": oid}, {"_id": 0})
     return updated
 
@@ -3592,8 +3603,18 @@ async def _notify_production_update(order: dict, note: str) -> Optional[dict]:
             result["email_open_token"] = open_token
             result["email_status"] = "sent"
         except Exception as e:
-            logger.exception("[Prod update notify] email failed")
-            result["email_error"] = str(e)
+            err = str(e)[:300]
+            logger.exception("[Prod update notify] email failed; queuing retry")
+            result["email_error"] = err
+            result["email_open_token"] = open_token
+            result["email_retry_attempt"] = 1
+            result["_retry_payload"] = {
+                "to_email": email,
+                "subject": subject,
+                "body_text": body_text,
+                "body_html": body_html,
+                "attach_paths": None,
+            }
 
     if not (result["whatsapp"] or result["email"] or result.get("whatsapp_error") or result.get("email_error")):
         return None
@@ -3625,7 +3646,7 @@ async def add_production_update(oid: str, data: ProductionUpdateIn, user: dict =
     fresh = await db.orders.find_one({"id": oid}, {"_id": 0})
     notify = await _notify_production_update(fresh, note)
     if notify:
-        await db.orders.update_one({"id": oid}, {"$push": {"notifications": notify}})
+        await _persist_order_notification(oid, notify)
         fresh = await db.orders.find_one({"id": oid}, {"_id": 0})
     return fresh
 
@@ -3665,7 +3686,7 @@ async def set_raw_material_status(oid: str, data: RawMaterialStatusIn, user: dic
         if notify:
             notify["stage"] = "in_production"
             notify["at"] = now_iso()
-            await db.orders.update_one({"id": oid}, {"$push": {"notifications": notify}})
+            await _persist_order_notification(oid, notify)
             updated = await db.orders.find_one({"id": oid}, {"_id": 0})
     return updated
 
@@ -3774,7 +3795,7 @@ async def generate_proforma(oid: str, user: dict = Depends(require_role("admin",
     if notify:
         notify["stage"] = "proforma_issued"
         notify["at"] = now_iso()
-        await db.orders.update_one({"id": oid}, {"$push": {"notifications": notify}})
+        await _persist_order_notification(oid, notify)
         updated = await db.orders.find_one({"id": oid}, {"_id": 0})
     return updated
 
@@ -3862,7 +3883,7 @@ async def upload_proforma(
     if notify:
         notify["stage"] = "proforma_issued"
         notify["at"] = now_iso()
-        await db.orders.update_one({"id": oid}, {"$push": {"notifications": notify}})
+        await _persist_order_notification(oid, notify)
         updated = await db.orders.find_one({"id": oid}, {"_id": 0})
     return updated
 
@@ -3921,7 +3942,7 @@ async def upload_dispatch_docs(
     if notify:
         notify["stage"] = "dispatched"
         notify["at"] = now_iso()
-        await db.orders.update_one({"id": oid}, {"$push": {"notifications": notify}})
+        await _persist_order_notification(oid, notify)
         updated = await db.orders.find_one({"id": oid}, {"_id": 0})
     return updated
 
@@ -3955,9 +3976,30 @@ async def upload_lr(
     if notify:
         notify["stage"] = "lr_received"
         notify["at"] = now_iso()
-        await db.orders.update_one({"id": oid}, {"$push": {"notifications": notify}})
+        await _persist_order_notification(oid, notify)
         updated = await db.orders.find_one({"id": oid}, {"_id": 0})
     return updated
+
+
+async def _persist_order_notification(order_id: str, notify: dict) -> dict:
+    """Stamp a fresh uuid `id` onto the notification, push to orders.notifications,
+    and (if email failed inline) enqueue a retry. Returns the updated entry."""
+    if not notify:
+        return notify
+    notify = dict(notify)
+    notify.setdefault("id", str(uuid.uuid4()))
+    notify.setdefault("at", now_iso())
+    retry_payload = notify.pop("_retry_payload", None)
+    await db.orders.update_one({"id": order_id}, {"$push": {"notifications": notify}})
+    if retry_payload and notify.get("email_error"):
+        await _enqueue_email_retry(
+            order_id=order_id,
+            notification_id=notify["id"],
+            payload=retry_payload,
+            last_error=notify["email_error"],
+        )
+    return notify
+
 
 
 @api.post("/orders/{oid}/refire-notification")
@@ -3985,7 +4027,7 @@ async def refire_order_notification(oid: str, user: dict = Depends(require_role(
         raise HTTPException(status_code=400, detail="Nothing to send — channels (WhatsApp + Email) are not configured. Enable them in Settings first.")
     notify["at"] = now_iso()
     notify["refire_of"] = last.get("at")
-    await db.orders.update_one({"id": oid}, {"$push": {"notifications": notify}})
+    await _persist_order_notification(oid, notify)
     return await db.orders.find_one({"id": oid}, {"_id": 0})
 
 
@@ -4168,6 +4210,134 @@ async def on_startup():
         await seed_data()
     except Exception as e:
         logger.exception(f"Seed failed: {e}")
+    # Start the email retry worker
+    asyncio.create_task(_email_retry_worker())
+
+
+# ─────────────────── Email retry queue ───────────────────
+
+EMAIL_RETRY_BACKOFF_SECONDS = [30, 120, 600]  # 30s → 2m → 10m
+EMAIL_RETRY_MAX_ATTEMPTS = len(EMAIL_RETRY_BACKOFF_SECONDS)
+
+
+async def _enqueue_email_retry(*, order_id: str, notification_id: str, payload: dict, last_error: str):
+    """Insert a row into email_retry_queue for the worker to pick up later."""
+    next_retry_at = (_now_dt() + timedelta(seconds=EMAIL_RETRY_BACKOFF_SECONDS[0])).isoformat()
+    await db.email_retry_queue.insert_one({
+        "id": str(uuid.uuid4()),
+        "order_id": order_id,
+        "notification_id": notification_id,
+        "attempt": 1,  # current attempt count (after first inline failure)
+        "next_retry_at": next_retry_at,
+        "payload": payload,  # {to_email, subject, body_text, body_html, attach_paths}
+        "last_error": last_error,
+        "status": "pending",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    })
+    logger.info(f"[retry-queue] enqueued order={order_id} notif={notification_id[:8]} next={next_retry_at}")
+
+
+async def _email_retry_worker():
+    """Background loop that picks due rows from email_retry_queue and re-attempts SMTP send.
+    On success, updates the original notification.email_status. On final failure (>= 3 attempts),
+    marks queue row as 'failed' and leaves the notification's email_error in place."""
+    logger.info("[retry-worker] starting")
+    while True:
+        try:
+            await _process_retry_batch()
+        except Exception:
+            logger.exception("[retry-worker] tick failed")
+        await asyncio.sleep(30)
+
+
+async def _process_retry_batch():
+    now_str = now_iso()
+    cur = db.email_retry_queue.find(
+        {"status": "pending", "next_retry_at": {"$lte": now_str}},
+        {"_id": 0},
+    ).sort("next_retry_at", 1).limit(20)
+    rows = await cur.to_list(length=20)
+    if not rows:
+        return
+    settings = await _get_integrations()
+    sm = settings["smtp"]
+    smtp_ok = sm.get("enabled") and sm.get("host") and sm.get("username") and sm.get("password") and sm.get("from_email")
+    for row in rows:
+        rid = row["id"]
+        if not smtp_ok:
+            # SMTP not configured — push next retry far out so we don't spin
+            await db.email_retry_queue.update_one(
+                {"id": rid},
+                {"$set": {"next_retry_at": (_now_dt() + timedelta(minutes=10)).isoformat(), "last_error": "SMTP not configured", "updated_at": now_iso()}},
+            )
+            continue
+        payload = row.get("payload") or {}
+        attempt = int(row.get("attempt", 1))
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                _send_smtp_email,
+                sm,
+                payload.get("to_email"),
+                payload.get("subject"),
+                payload.get("body_text"),
+                payload.get("attach_paths"),
+                payload.get("body_html"),
+            )
+            # Success — flip the queue row + original notification
+            await db.email_retry_queue.update_one(
+                {"id": rid},
+                {"$set": {"status": "sent", "sent_at": now_iso(), "updated_at": now_iso()}},
+            )
+            await db.orders.update_one(
+                {"id": row["order_id"], "notifications.id": row["notification_id"]},
+                {"$set": {
+                    "notifications.$.email": True,
+                    "notifications.$.email_status": "sent",
+                    "notifications.$.email_status_updated_at": now_iso(),
+                    "notifications.$.email_error": None,
+                    "notifications.$.email_retry_attempt": attempt + 1,
+                }},
+            )
+            logger.info(f"[retry-worker] success order={row['order_id']} notif={row['notification_id'][:8]} on attempt {attempt + 1}")
+        except Exception as e:
+            err = str(e)[:300]
+            new_attempt = attempt + 1
+            if new_attempt > EMAIL_RETRY_MAX_ATTEMPTS:
+                # Final failure
+                await db.email_retry_queue.update_one(
+                    {"id": rid},
+                    {"$set": {"status": "failed", "attempt": new_attempt, "last_error": err, "updated_at": now_iso()}},
+                )
+                await db.orders.update_one(
+                    {"id": row["order_id"], "notifications.id": row["notification_id"]},
+                    {"$set": {
+                        "notifications.$.email_error": err,
+                        "notifications.$.email_retry_attempt": new_attempt,
+                        "notifications.$.email_retry_exhausted": True,
+                    }},
+                )
+                logger.warning(f"[retry-worker] EXHAUSTED order={row['order_id']} notif={row['notification_id'][:8]}")
+            else:
+                # Schedule next attempt
+                delay = EMAIL_RETRY_BACKOFF_SECONDS[min(new_attempt - 1, len(EMAIL_RETRY_BACKOFF_SECONDS) - 1)]
+                next_at = (_now_dt() + timedelta(seconds=delay)).isoformat()
+                await db.email_retry_queue.update_one(
+                    {"id": rid},
+                    {"$set": {"attempt": new_attempt, "next_retry_at": next_at, "last_error": err, "updated_at": now_iso()}},
+                )
+                # Surface attempt count + next-retry on the notification too
+                await db.orders.update_one(
+                    {"id": row["order_id"], "notifications.id": row["notification_id"]},
+                    {"$set": {
+                        "notifications.$.email_retry_attempt": new_attempt,
+                        "notifications.$.email_retry_next_at": next_at,
+                        "notifications.$.email_error": err,
+                    }},
+                )
+                logger.info(f"[retry-worker] retry scheduled order={row['order_id']} notif={row['notification_id'][:8]} attempt={new_attempt} next={next_at}")
 
 
 @app.on_event("shutdown")

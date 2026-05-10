@@ -116,6 +116,15 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## ETA Nudge + Email Retry Queue (2026-05-10)
+- **ETA Nudge** on Orders list: amber banner counts in-flight orders missing an Expected Completion Date; new "ETA" column shows the date in green, or a clickable amber "Set ETA" link for in-flight rows that don't have one. Whole row tints amber for missing-ETA orders. In-flight = stage > pending_po and < delivered.
+- **Email Retry Queue** with exponential backoff (30s → 2m → 10m, max 3 attempts):
+  - Background asyncio worker started on app startup; ticks every 30s
+  - When `_order_auto_notify` or `_notify_production_update` SMTP send fails inline, the email is captured into `email_retry_queue` collection with `next_retry_at` set 30s out
+  - Worker re-attempts the send; on success flips the original notification's `email_status: sent` and clears `email_error`. On exhaustion, marks `email_retry_exhausted: true` and persists the final error.
+  - Each notification entry now carries a unique `id` (uuid) so the worker can target the exact row via `notifications.id`. New helper `_persist_order_notification` centralizes the push + retry-enqueue logic across all 9 notification call sites.
+  - Live-tested: forced a stub retry → worker picked it up within 30s, sent successfully, flipped `email_status: sent`, `email_retry_attempt: 2`.
+
 ## Order Notification Read-Receipts (2026-05-10)
 - Each order email notification now embeds a 1×1 tracking pixel; `_order_auto_notify` and `_notify_production_update` mint an `email_open_token` per send and persist it on the notification entry alongside `email_status="sent"`.
 - `/api/webhooks/email/open` extended to also lookup `orders.notifications` by `email_open_token`. On hit, flips `email_status: sent → read` with `email_status_updated_at` timestamp.
