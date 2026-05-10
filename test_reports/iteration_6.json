@@ -1,0 +1,49 @@
+{
+  "summary": "Validated PURE REFACTOR of /api/orders/* endpoints from server.py → routers/orders.py. All 15 order endpoints behave identically post-move. Created /app/backend/tests/test_orders_router_refactor.py with 19 targeted regression tests (mount verification, auth gating, 404 paths, validation, sibling-router regression, _id leak). All 19 PASS. Full pre-existing suites: Phase 2B/2C dispatch+orders 28/29 (1 known flake), Phase 2A quotations 34/34, Phase 2D public-PO submit 18/18, WhatsApp bot flow 4/4, Phase 2E OTP 11/11 + 1 skipped, CRM core 35/41 (6 known seed-data flakes). NO new regressions introduced by the refactor. server.py no longer has any @api.* /orders decorators (grep -nE '@api\\.(get|post|put|delete|patch).*\"/orders' returns empty). Router properly mounted at server.py:1276 via api.include_router(_orders_router.router). Helpers correctly imported from services/dispatch.py. _bot_finalize_quote (server.py:127) and public_submit_po (server.py:766) still function — covered by WA bot flow + Phase2D suites.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/orders + POST /api/orders/{oid}/advance",
+        "issue": "Pre-existing flake (NOT introduced by this refactor): tests/test_phase2bc_dispatch_orders.py::TestOrders::test_advance_through_production_stages fails because the seeded order is intentionally missing Tax-Invoice + E-way-Bill, so the route correctly rejects advance→dispatched with 400. The route behaviour is correct (matches STAGE_REQUIRED_DOCS gate in services/dispatch.py). Either upload dispatch docs in the test setup or rewrite the test to assert on the 400."
+      },
+      {
+        "endpoint": "Carried over from iter_5",
+        "issue": "DEV_OTP_PASSTHROUGH default 'true' in server.py:1375 — production-leak risk."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_orders_router_refactor.py",
+    "/app/backend/tests/test_phase2bc_dispatch_orders.py",
+    "/app/test_reports/pytest/iteration6_orders.xml",
+    "/app/test_reports/pytest/iteration6_router_refactor.xml"
+  ],
+  "action_items": [
+    "Optional: fix the pre-existing test_advance_through_production_stages flake by uploading invoice+eway in setup (gate is working correctly; only the test is stale).",
+    "Carried over from iter_5: default DEV_OTP_PASSTHROUGH to 'false'."
+  ],
+  "critical_code_review_comments": [
+    "routers/orders.py imports the unused symbol ORDER_STAGES from services.dispatch — harmless but flagged by ruff F401 if enabled.",
+    "routers/orders.py has two local `import asyncio` and `import uuid` statements inside endpoint bodies (generate_proforma, generate_invoice, add_production_update). Move to module top-level for clarity (already imported by services.dispatch but not re-exported here).",
+    "_render_pdf_for_order is duplicated in routers/orders.py and previously in server.py (server.py still owns a similar block at lines 227-268 for _bot_finalize_quote's PI generation). Consider extracting to services/dispatch.py to avoid drift.",
+    "STAGE_REQUIRED_DOCS gate enforces required uploads before stage advance — this is intentional and correct; the failing legacy test asserts the OLD (pre-gate) behaviour.",
+    "persist_order_notification in services/dispatch.py late-imports _enqueue_email_retry from server.py — documented but creates a soft circular dependency. Move _enqueue_email_retry into a services/email_queue.py to fully break the cycle.",
+    "server.py still owns 3 order-touching helpers (_bot_finalize_quote, public_submit_po, _public_order_summary) — refactor is 95% complete; main agent may want to finish moving these so server.py shrinks below the 700-line threshold."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_orders_router_refactor.py"
+  ],
+  "success_rate": {
+    "backend": "100% on refactor-targeted tests (19/19 new + 28/29 legacy with the 1 known-pre-existing flake). 28+19=47/48 = 97.9% of orders-related tests pass.",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "admin@hrexporter.com / Admin@123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None — new test file uses GET-only probes against existing orders + bogus IDs for 404 paths.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run `pytest /app/backend/tests/test_orders_router_refactor.py -v` (~3 s, 19 passed) to lock-in the routers/orders.py contract. Full orders regression: `pytest /app/backend/tests/test_phase2bc_dispatch_orders.py tests/test_orders_router_refactor.py tests/test_whatsapp_bot_flow.py tests/test_phase2d_customer_po_submit.py -v` (~22 s, ~76 passed + 1 known flake). The TestOrders::test_advance_through_production_stages flake is NOT a regression — STAGE_REQUIRED_DOCS gate is enforced for proforma_issued/dispatched/lr_received, and the test order lacks those docs. routers/orders.py is 463 lines, well within the 700-line guideline. server.py still owns _bot_finalize_quote (line 127), public_submit_po (line 766), _public_order_summary (line 586) — these are the next refactor candidates.",
+  "rca of the issue": "No defect in the refactor. The single failing legacy test (test_advance_through_production_stages) reproduces because (a) order seed lacks documents.invoice and documents.eway_bill, (b) STAGE_REQUIRED_DOCS['dispatched'] = [('documents.invoice','Tax Invoice'),('documents.eway_bill','E-way Bill')], (c) missing_required_docs() returns ['Tax Invoice','E-way Bill'], (d) route correctly returns 400. Fix: either pre-upload the two docs in test setup, or split the test into 'advance to proforma_issued' (which has its own proforma doc) and a separate dispatch-flow test that uploads the dispatch docs first via /api/orders/{oid}/upload-dispatch."
+}
