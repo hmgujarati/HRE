@@ -24,18 +24,23 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
 
+# Shared infra (db handle, JWT helpers, auth deps, common Pydantic models) lives
+# in `core.py` so per-domain routers in `routers/` can import them without
+# circular-importing this module.
+from core import (
+    db, client, JWT_SECRET, JWT_ALGO, JWT_EXP_HOURS,
+    now_iso, hash_password, verify_password, create_token,
+    get_current_user, require_role, calc_final_price,
+    LoginIn, UserOut, MaterialIn, CategoryIn,
+    ProductFamilyIn, ProductVariantIn, BulkDiscountIn,
+)
+
 
 # ---------- Setup ----------
 UPLOAD_DIR = ROOT_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
-
-JWT_SECRET = os.environ['JWT_SECRET']
-JWT_ALGO = "HS256"
-JWT_EXP_HOURS = 24
 
 app = FastAPI(title="HRE Exporter CRM API")
 api = APIRouter(prefix="/api")
@@ -44,239 +49,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 
-# ---------- Helpers ----------
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def hash_password(pw: str) -> str:
-    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
-
-
-def verify_password(pw: str, hashed: str) -> bool:
-    try:
-        return bcrypt.checkpw(pw.encode(), hashed.encode())
-    except Exception:
-        return False
-
-
-def create_token(user_id: str, email: str, role: str) -> str:
-    payload = {
-        "sub": user_id,
-        "email": email,
-        "role": role,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXP_HOURS),
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
-
-
-async def get_current_user(request: Request) -> dict:
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    token = auth[7:]
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
-
-
-def require_role(*roles):
-    async def _checker(user: dict = Depends(get_current_user)) -> dict:
-        if user.get("role") not in roles:
-            raise HTTPException(status_code=403, detail="Insufficient permissions")
-        return user
-    return _checker
-
-
-def calc_final_price(base_price: float, discount: float, manual_override: bool, manual_price: Optional[float]) -> float:
-    if manual_override and manual_price is not None:
-        return round(float(manual_price), 2)
-    return round(float(base_price) - (float(base_price) * float(discount) / 100.0), 2)
-
-
-# ---------- Models ----------
-class LoginIn(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class UserOut(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str
-    name: str
-    email: EmailStr
-    mobile: Optional[str] = None
-    role: str
-    active: bool = True
-
-
-class MaterialIn(BaseModel):
-    material_name: str
-    description: Optional[str] = ""
-    active: bool = True
-
-
-class CategoryIn(BaseModel):
-    category_name: str
-    material_id: str
-    parent_category_id: Optional[str] = None
-    description: Optional[str] = ""
-    active: bool = True
-
-
-class ProductFamilyIn(BaseModel):
-    family_name: str
-    short_name: Optional[str] = ""
-    material_id: str
-    category_id: str
-    subcategory_id: Optional[str] = None
-    product_type: Optional[str] = ""
-    catalogue_title: Optional[str] = ""
-    material_description: Optional[str] = ""
-    specification_description: Optional[str] = ""
-    finish_description: Optional[str] = ""
-    insulation_colour_coding: Optional[str] = ""
-    standard_reference: Optional[str] = ""
-    description: Optional[str] = ""
-    active: bool = True
-
-
-class ProductVariantIn(BaseModel):
-    product_family_id: str
-    product_code: str
-    product_name: Optional[str] = ""
-    material_id: str
-    category_id: str
-    subcategory_id: Optional[str] = None
-    cable_size: Optional[str] = ""
-    hole_size: Optional[str] = ""
-    size: Optional[str] = ""
-    unit: str = "NOS"
-    hsn_code: str = "85369090"
-    gst_percentage: float = 18.0
-    base_price: float = 0.0
-    discount_percentage: float = 0.0
-    manual_price_override: bool = False
-    manual_price: Optional[float] = None
-    minimum_order_quantity: int = 1
-    dimensions: Dict[str, Any] = Field(default_factory=dict)
-    notes: Optional[str] = ""
-    active: bool = True
-
-
-class BulkDiscountIn(BaseModel):
-    discount_percentage: float
-    target_id: str  # material_id, category_id, or product_family_id
-    change_reason: Optional[str] = "Bulk discount update"
+# ---------- Helpers + models live in core.py (shared with routers/) ----------
 
 
 # ---------- Auth Routes ----------
-@api.post("/auth/login")
-async def login(payload: LoginIn):
-    user = await db.users.find_one({"email": payload.email.lower()})
-    if not user or not user.get("active", True):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    if not verify_password(payload.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_token(user["id"], user["email"], user["role"])
-    return {
-        "token": token,
-        "user": {
-            "id": user["id"], "name": user["name"], "email": user["email"],
-            "mobile": user.get("mobile"), "role": user["role"], "active": user.get("active", True),
-        },
-    }
-
-
-@api.get("/auth/me")
-async def me(user: dict = Depends(get_current_user)):
-    return user
-
-
-@api.post("/auth/logout")
-async def logout(_: dict = Depends(get_current_user)):
-    return {"ok": True}
-
-
-# ---------- Materials ----------
-@api.get("/materials")
-async def list_materials(_: dict = Depends(get_current_user)):
-    items = await db.materials.find({}, {"_id": 0}).sort("material_name", 1).to_list(1000)
-    return items
-
-
-@api.post("/materials")
-async def create_material(data: MaterialIn, user: dict = Depends(require_role("admin"))):
-    doc = data.model_dump()
-    doc["id"] = str(uuid.uuid4())
-    doc["created_at"] = now_iso()
-    doc["updated_at"] = now_iso()
-    await db.materials.insert_one(doc.copy())
-    doc.pop("_id", None)
-    return doc
-
-
-@api.put("/materials/{mid}")
-async def update_material(mid: str, data: MaterialIn, user: dict = Depends(require_role("admin", "manager"))):
-    upd = data.model_dump()
-    upd["updated_at"] = now_iso()
-    res = await db.materials.update_one({"id": mid}, {"$set": upd})
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Material not found")
-    item = await db.materials.find_one({"id": mid}, {"_id": 0})
-    return item
-
-
-@api.delete("/materials/{mid}")
-async def delete_material(mid: str, user: dict = Depends(require_role("admin"))):
-    res = await db.materials.delete_one({"id": mid})
-    if res.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Material not found")
-    return {"ok": True}
-
-
-# ---------- Categories ----------
-@api.get("/categories")
-async def list_categories(_: dict = Depends(get_current_user)):
-    items = await db.categories.find({}, {"_id": 0}).sort("category_name", 1).to_list(2000)
-    return items
-
-
-@api.post("/categories")
-async def create_category(data: CategoryIn, user: dict = Depends(require_role("admin"))):
-    doc = data.model_dump()
-    doc["id"] = str(uuid.uuid4())
-    doc["created_at"] = now_iso()
-    doc["updated_at"] = now_iso()
-    await db.categories.insert_one(doc.copy())
-    doc.pop("_id", None)
-    return doc
-
-
-@api.put("/categories/{cid}")
-async def update_category(cid: str, data: CategoryIn, user: dict = Depends(require_role("admin", "manager"))):
-    upd = data.model_dump()
-    upd["updated_at"] = now_iso()
-    res = await db.categories.update_one({"id": cid}, {"$set": upd})
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Category not found")
-    item = await db.categories.find_one({"id": cid}, {"_id": 0})
-    return item
-
-
-@api.delete("/categories/{cid}")
-async def delete_category(cid: str, user: dict = Depends(require_role("admin"))):
-    res = await db.categories.delete_one({"id": cid})
-    if res.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Category not found")
-    return {"ok": True}
+# Auth, materials, categories, dashboard endpoints have been moved to routers/.
+# See bottom of file for `api.include_router(...)` calls that mount them.
 
 
 # ---------- Product Families ----------
@@ -870,47 +648,13 @@ async def upload_prices_excel(
 
 
 # ---------- Dashboard ----------
-@api.get("/dashboard/stats")
-async def dashboard_stats(_: dict = Depends(get_current_user)):
-    materials = await db.materials.find({}, {"_id": 0}).to_list(100)
-    mat_map = {m["id"]: m["material_name"] for m in materials}
-    total_families = await db.product_families.count_documents({})
-    total_variants = await db.product_variants.count_documents({})
-    active_variants = await db.product_variants.count_documents({"active": True})
-    total_categories = await db.categories.count_documents({})
-
-    material_counts = {}
-    for mid, mname in mat_map.items():
-        cnt = await db.product_variants.count_documents({"material_id": mid})
-        material_counts[mname] = cnt
-
-    recent_families = await db.product_families.find({}, {"_id": 0}).sort("created_at", -1).limit(5).to_list(5)
-    recent_price_changes = await db.price_history.find({}, {"_id": 0}).sort("changed_at", -1).limit(8).to_list(8)
-
-    return {
-        "total_families": total_families,
-        "total_variants": total_variants,
-        "active_variants": active_variants,
-        "total_categories": total_categories,
-        "material_counts": material_counts,
-        "recent_families": recent_families,
-        "recent_price_changes": recent_price_changes,
-    }
-
-
 # ---------- Public (unauthenticated) ----------
 @api.get("/")
 async def root():
     return {"service": "HRE Exporter CRM API", "status": "ok"}
 
 
-@api.get("/public/stats")
-async def public_stats():
-    """Lightweight, unauthenticated counts for the login splash."""
-    materials = await db.materials.count_documents({"active": True})
-    families = await db.product_families.count_documents({"active": True})
-    variants = await db.product_variants.count_documents({"active": True})
-    return {"materials": materials, "families": families, "variants": variants}
+# `/dashboard/stats` and `/public/stats` moved to routers/dashboard.py
 
 
 # ---------- Contacts (CRM) ----------
@@ -4571,6 +4315,18 @@ async def shutdown():
 async def root():
     return {"service": "HRE Exporter CRM API", "status": "ok"}
 
+
+
+# ---------- Mount per-domain routers (Phase A — auth/materials/categories/dashboard) ----------
+from routers import auth as _auth_router  # noqa: E402
+from routers import materials as _materials_router  # noqa: E402
+from routers import categories as _categories_router  # noqa: E402
+from routers import dashboard as _dashboard_router  # noqa: E402
+
+api.include_router(_auth_router.router)
+api.include_router(_materials_router.router)
+api.include_router(_categories_router.router)
+api.include_router(_dashboard_router.router)
 
 
 # Mount the API router AFTER all routes are registered

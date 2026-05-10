@@ -116,6 +116,14 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Phase A Refactor — auth/materials/categories/dashboard → routers/ (2026-05-10)
+- Established the modular-router pattern: shared infra moved to `/app/backend/core.py` (db handle, JWT helpers, `get_current_user`/`require_role` deps, common Pydantic models — `LoginIn`/`MaterialIn`/`CategoryIn`/`ProductFamilyIn`/`ProductVariantIn`/`BulkDiscountIn`).
+- New `routers/` package with 4 modules: `auth.py`, `materials.py`, `categories.py`, `dashboard.py` (13 routes total — all admin/public CRUD + stats).
+- `server.py` now `from core import …` for shared resources, mounts the new routers via `api.include_router(...)` at the bottom (after all legacy routes are registered, to preserve ordering semantics for FastAPI).
+- Verified: backend started cleanly, all 4 sub-routers respond correctly via curl (login → token → /me → /materials → /categories → /dashboard/stats → /logout). Login + Catalogue Dashboard render unchanged in the admin UI.
+- Tests: 7/7 TestAuth + TestMaterials pass; 4/4 chatbot regression tests pass; 95/96 phase 2 tests pass (the 1 failure is the same pre-existing seed-state test — unrelated to refactor).
+- Size impact: server.py 4578 → 4333 lines (-245). New code 349 lines split across 6 files. Phase B (families, variants, pricing, settings) and Phase C (contacts, quotations, orders, webhooks, public) remain.
+
 ## WhatsApp Chatbot v2 — Material → Family → Cable → Hole → Qty → Proforma (2026-05-10)
 - **Bug fix #1**: Bot was using wrong field names (`name`/`code`/`price`/`family_id`) — schema is `family_name`/`product_code`/`final_price`/`product_family_id`. On the customer's WhatsApp, family lists rendered as "Family / Tap to select" (empty fallback) and variants as "Variant / ₹0/unit". Fixed by aligning schema reads in `_send_family_list`, `_send_variant_*` and `_bot_finalize_quote`.
 - **Bug fix #2 (live)**: After fix #1, the user reported that tapping a family on real WhatsApp made the bot reply "Please tap one of the families…". Root cause: BizChat's LIVE inbound envelope nests the `interactive.list_reply.id` (and `button_reply.id`) inside `whatsapp_webhook_payload.entry[].changes[].value.messages[].interactive.*` — the top-level `message.body` only carries the visible row TITLE, not the row id. The old parser only checked `message.interactive`, missed the nested path, returned `selection_id=""`, and the state machine fell through to "expecting_family". Fixed `parse_inbound` to walk the Meta-style nested envelope first; backwards-compatible with the simple `data.message.interactive.*` shape. Verified by replaying the user's actual stuck `webhook_events` payload — bot now correctly transitions PICK_FAMILY → ASK_CABLE.
