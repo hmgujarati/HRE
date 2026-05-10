@@ -2176,25 +2176,37 @@ async def bizchat_status_webhook(request: Request, secret: Optional[str] = None)
         wamid = ev["wamid"]
         new_status = ev["status"]
         ts = ev.get("timestamp") or now_iso()
-        # Only upgrade status, never downgrade (late "sent" mustn't overwrite "read")
-        quote = await db.quotations.find_one({"dispatch_log.wamid": wamid}, {"_id": 0, "dispatch_log": 1})
-        if not quote:
+        # Try quotations.dispatch_log first
+        quote = await db.quotations.find_one({"dispatch_log.wamid": wamid}, {"_id": 0, "dispatch_log": 1, "id": 1})
+        if quote:
+            cur_entry = next((e for e in quote.get("dispatch_log", []) if e.get("wamid") == wamid), None)
+            if cur_entry and STATUS_RANK.get(new_status, 0) > STATUS_RANK.get(cur_entry.get("status", "pending"), 0):
+                res = await db.quotations.update_one(
+                    {"dispatch_log.wamid": wamid},
+                    {"$set": {
+                        "dispatch_log.$.status": new_status,
+                        "dispatch_log.$.status_updated_at": ts,
+                    }},
+                )
+                if res.modified_count:
+                    updated += 1
+                    logger.info(f"[WA WEBHOOK] quote wamid={wamid[:30]}… status={new_status}")
             continue
-        cur_entry = next((e for e in quote.get("dispatch_log", []) if e.get("wamid") == wamid), None)
-        if not cur_entry:
-            continue
-        if STATUS_RANK.get(new_status, 0) <= STATUS_RANK.get(cur_entry.get("status", "pending"), 0):
-            continue
-        res = await db.quotations.update_one(
-            {"dispatch_log.wamid": wamid},
-            {"$set": {
-                "dispatch_log.$.status": new_status,
-                "dispatch_log.$.status_updated_at": ts,
-            }},
-        )
-        if res.modified_count:
-            updated += 1
-            logger.info(f"[WA WEBHOOK] wamid={wamid[:30]}… status={new_status}")
+        # Else try orders.notifications
+        order = await db.orders.find_one({"notifications.wamid": wamid}, {"_id": 0, "id": 1, "notifications": 1})
+        if order:
+            cur_entry = next((n for n in order.get("notifications", []) if n.get("wamid") == wamid), None)
+            if cur_entry and STATUS_RANK.get(new_status, 0) > STATUS_RANK.get(cur_entry.get("whatsapp_status", "pending"), 0):
+                res = await db.orders.update_one(
+                    {"notifications.wamid": wamid},
+                    {"$set": {
+                        "notifications.$.whatsapp_status": new_status,
+                        "notifications.$.whatsapp_status_updated_at": ts,
+                    }},
+                )
+                if res.modified_count:
+                    updated += 1
+                    logger.info(f"[WA WEBHOOK] order wamid={wamid[:30]}… status={new_status}")
     return {"ok": True, "events": len(events), "updated": updated}
 
 
@@ -2234,6 +2246,23 @@ async def email_open_tracking(t: Optional[str] = None):
                         }},
                     )
                     logger.info(f"[EMAIL OPEN] quote={quote['id']} token={t[:10]}… → read")
+            else:
+                # Try order notifications
+                order = await db.orders.find_one(
+                    {"notifications.email_open_token": t},
+                    {"_id": 0, "id": 1, "notifications": 1},
+                )
+                if order:
+                    entry = next((n for n in order.get("notifications", []) if n.get("email_open_token") == t), None)
+                    if entry and entry.get("email_status") in ("sent", None):
+                        await db.orders.update_one(
+                            {"id": order["id"], "notifications.email_open_token": t},
+                            {"$set": {
+                                "notifications.$.email_status": "read",
+                                "notifications.$.email_status_updated_at": now_iso(),
+                            }},
+                        )
+                        logger.info(f"[EMAIL OPEN] order={order['id']} token={t[:10]}… → read")
         except Exception:
             logger.exception("[EMAIL OPEN] failed to process")
     # Always return the pixel + no-cache headers so every open is logged
@@ -3170,6 +3199,9 @@ async def _order_auto_notify(order: dict, stage: str):
         "whatsapp": False,
         "email": False,
     }
+    # Pre-mint an email open token so we can both inject it into the HTML AND
+    # persist it on the notification record for webhook lookup later.
+    open_token = secrets.token_urlsafe(24)
 
     # ---- WhatsApp ----
     if tpl_name and phone and wa.get("enabled") and wa.get("vendor_uid") and wa.get("token"):
@@ -3193,6 +3225,7 @@ async def _order_auto_notify(order: dict, stage: str):
             result["whatsapp"] = True
             result["wamid"] = data.get("wamid")
             result["status"] = data.get("status") or "sent"
+            result["whatsapp_status"] = "sent"
             # Follow-up: ship the second document via send-media-message
             if secondary:
                 try:
@@ -3246,13 +3279,17 @@ async def _order_auto_notify(order: dict, stage: str):
 {attach_list_html}
 </td></tr>
 <tr><td style="background:#fafafa;color:#a1a1aa;padding:14px 24px;font-size:11px;text-align:center;border-top:1px solid #e4e4e7;">An ISO 9001:2015 Certified Company &middot; info@hrexporter.com</td></tr>
-</table></body></html>"""
+</table>
+<img src="{PUBLIC_BASE_URL}/api/webhooks/email/open?t={open_token}" width="1" height="1" alt="" style="display:none" />
+</body></html>"""
             # Attach actual files (skip ones whose local path doesn't exist)
             attach_paths = [a["path"] for a in attachments if a.get("path")]
             import asyncio
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, _send_smtp_email, sm, email, subject, body_text, attach_paths, body_html)
             result["email"] = True
+            result["email_open_token"] = open_token
+            result["email_status"] = "sent"
         except Exception as e:
             logger.exception(f"[Order notify] stage={stage} email failed")
             result["email_error"] = str(e)
@@ -3484,6 +3521,7 @@ async def _notify_production_update(order: dict, note: str) -> Optional[dict]:
             eta_pretty = eta
     timestamp = f"{timestamp_raw}  ·  Expected completion: {eta_pretty}" if eta_pretty else timestamp_raw
     result: Dict[str, Any] = {"kind": "production_update", "note": note, "whatsapp": False, "email": False, "at": now_iso()}
+    open_token = secrets.token_urlsafe(24)
 
     # ---- WhatsApp ----
     # Use the dedicated production-update template if configured; otherwise fall
@@ -3509,6 +3547,7 @@ async def _notify_production_update(order: dict, note: str) -> Optional[dict]:
             result["whatsapp"] = True
             result["wamid"] = data.get("wamid")
             result["template"] = tpl_name
+            result["whatsapp_status"] = "sent"
         except HTTPException as e:
             logger.error(f"[Prod update notify] WA failed: {e.detail}")
             result["whatsapp_error"] = str(e.detail)
@@ -3543,11 +3582,15 @@ async def _notify_production_update(order: dict, note: str) -> Optional[dict]:
 {eta_block_html}
 </td></tr>
 <tr><td style="background:#fafafa;color:#a1a1aa;padding:14px 24px;font-size:11px;text-align:center;border-top:1px solid #e4e4e7;">An ISO 9001:2015 Certified Company &middot; info@hrexporter.com</td></tr>
-</table></body></html>"""
+</table>
+<img src="{PUBLIC_BASE_URL}/api/webhooks/email/open?t={open_token}" width="1" height="1" alt="" style="display:none" />
+</body></html>"""
             import asyncio
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, _send_smtp_email, sm, email, subject, body_text, None, body_html)
             result["email"] = True
+            result["email_open_token"] = open_token
+            result["email_status"] = "sent"
         except Exception as e:
             logger.exception("[Prod update notify] email failed")
             result["email_error"] = str(e)

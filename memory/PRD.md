@@ -116,6 +116,12 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Order Notification Read-Receipts (2026-05-10)
+- Each order email notification now embeds a 1×1 tracking pixel; `_order_auto_notify` and `_notify_production_update` mint an `email_open_token` per send and persist it on the notification entry alongside `email_status="sent"`.
+- `/api/webhooks/email/open` extended to also lookup `orders.notifications` by `email_open_token`. On hit, flips `email_status: sent → read` with `email_status_updated_at` timestamp.
+- `/api/webhooks/bizchat/status` extended to also lookup `orders.notifications` by `wamid`. Status hierarchy: pending → accepted → sent → delivered → read (failed terminal). Only upgrades, never downgrades.
+- OrderView "Customer pings" panel rebuilt: per-channel pills now show full status (sent / delivered / read / failed) with timestamps; failed entries display the error inline. Re-fire badge for re-sent entries. **Live-tested**: pixel hit on a fresh re-fire flipped `email_status` from `sent` → `read` and the UI rendered `EMAIL · READ @ 6:12:22 AM`.
+
 ## Re-fire Notifications + Auto Language Sync (2026-05-10)
 - New endpoint `POST /api/settings/whatsapp/sync-template-languages` queries BizChat's template list and auto-overwrites every stale `*_template_language` field with the actual approved language. Triggered automatically when admin clicks "Load Templates" in Settings UI. Live-tested: 4 stage template languages (`order_pi/packaging/dispatched/lr_template_language`) auto-flipped from `en` → `en_US`, fixing the live "Template language not found" failures.
 - New endpoint `POST /api/orders/{oid}/refire-notification` re-fires the most recent stage or production-update notification (WhatsApp + Email) for an order without advancing the stage. Stamps `refire_of` on the new entry for audit. Useful when a previous send failed or customer asks for a re-send. Live-tested on HRE/ORD/2026-27/0003 after language sync — both channels delivered (`whatsapp: True, email: True`).

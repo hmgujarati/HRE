@@ -248,8 +248,14 @@ export default function OrderView() {
               <div className="p-5 space-y-2 text-xs">
                 {[...order.notifications].reverse().map((n, i) => {
                   const isProdUpdate = n.kind === "production_update";
-                  const waBadge = n.whatsapp ? "sent" : (n.whatsapp_error ? "failed" : "—");
-                  const emBadge = n.email ? "sent" : (n.email_error ? "failed" : "—");
+                  // Status hierarchy: failed → sent → delivered → read
+                  const waLevel = n.whatsapp_error ? "failed" : (n.whatsapp_status || (n.whatsapp ? "sent" : "—"));
+                  const emLevel = n.email_error ? "failed" : (n.email_status || (n.email ? "sent" : "—"));
+                  const STATUS_COLORS = {
+                    "—": "text-zinc-400", "sent": "text-emerald-700", "delivered": "text-blue-700",
+                    "read": "text-violet-700", "failed": "text-red-600", "accepted": "text-emerald-700",
+                    "pending": "text-zinc-400",
+                  };
                   return (
                     <div key={i} className={`border-l-2 ${n.whatsapp || n.email ? "border-emerald-400" : "border-red-400"} pl-3 py-1.5`}>
                       <div className="flex items-center gap-2 flex-wrap">
@@ -257,14 +263,20 @@ export default function OrderView() {
                         {n.refire_of && <span className="text-[9px] uppercase tracking-wider font-bold bg-zinc-100 text-zinc-600 px-1.5 py-0.5">re-fire</span>}
                         <span className="text-[10px] text-zinc-500 ml-auto font-mono">{n.at ? new Date(n.at).toLocaleString() : ""}</span>
                       </div>
-                      <div className="flex items-center gap-3 mt-1">
+                      <div className="flex items-center gap-3 mt-1 flex-wrap">
                         <span className="flex items-center gap-1">
                           <WhatsappLogo size={11} weight="fill" className={n.whatsapp ? "text-[#25D366]" : "text-zinc-300"} />
-                          <span className={`text-[10px] uppercase tracking-wider font-bold ${n.whatsapp ? "text-emerald-700" : (n.whatsapp_error ? "text-red-600" : "text-zinc-400")}`}>WA · {waBadge}</span>
+                          <span className={`text-[10px] uppercase tracking-wider font-bold ${STATUS_COLORS[waLevel] || "text-zinc-500"}`}>WA · {waLevel}</span>
+                          {n.whatsapp_status_updated_at && waLevel !== "sent" && (
+                            <span className="text-[9px] font-mono text-zinc-400">@ {new Date(n.whatsapp_status_updated_at).toLocaleTimeString()}</span>
+                          )}
                         </span>
                         <span className="flex items-center gap-1">
                           <EnvelopeSimple size={11} weight="fill" className={n.email ? "text-[#FBAE17]" : "text-zinc-300"} />
-                          <span className={`text-[10px] uppercase tracking-wider font-bold ${n.email ? "text-emerald-700" : (n.email_error ? "text-red-600" : "text-zinc-400")}`}>Email · {emBadge}</span>
+                          <span className={`text-[10px] uppercase tracking-wider font-bold ${STATUS_COLORS[emLevel] || "text-zinc-500"}`}>Email · {emLevel}</span>
+                          {n.email_status_updated_at && emLevel === "read" && (
+                            <span className="text-[9px] font-mono text-zinc-400">@ {new Date(n.email_status_updated_at).toLocaleTimeString()}</span>
+                          )}
                         </span>
                       </div>
                       {isProdUpdate && n.note && <div className="text-zinc-600 text-[11px] mt-1 italic">"{n.note}"</div>}
