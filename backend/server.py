@@ -1404,6 +1404,9 @@ DEFAULT_INTEGRATIONS = {
         "order_dispatched_template_language": "en",
         "order_lr_template": "",
         "order_lr_template_language": "en",
+        # Ad-hoc production updates (fires when admin posts a free-form note)
+        "order_production_update_template": "",
+        "order_production_update_template_language": "en",
         # Internal admin alert when customer submits a PO (Phase 2C-customer)
         "admin_notify_phone": "",
         "po_received_admin_template": "",
@@ -1897,6 +1900,8 @@ class WhatsAppSettingsIn(BaseModel):
     order_dispatched_template_language: str = "en"
     order_lr_template: str = ""
     order_lr_template_language: str = "en"
+    order_production_update_template: str = ""
+    order_production_update_template_language: str = "en"
     admin_notify_phone: str = ""
     po_received_admin_template: str = ""
     po_received_admin_template_language: str = "en"
@@ -2267,7 +2272,7 @@ async def _send_otp_email(sm: dict, to_email: str, code: str) -> tuple[bool, Opt
     try:
         import asyncio
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _send_email_sync, sm, to_email, subject, body_text, None, body_html)
+        await loop.run_in_executor(None, _send_smtp_email, sm, to_email, subject, body_text, None, body_html)
         return True, None
     except Exception as e:
         logger.exception("[OTP-Email] send failed")
@@ -2703,7 +2708,7 @@ async def _notify_admin_po_received(order: dict, quote: dict, contact: dict, has
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
-                _send_email_sync,
+                _send_smtp_email,
                 sm,
                 notify_to,
                 f"[HRE] PO received — {customer} ({quote_no})",
@@ -2934,6 +2939,23 @@ ORDER_STAGES = [
 ]
 STAGE_TO_LABEL = dict(ORDER_STAGES)
 STAGE_ORDER = [s for s, _ in ORDER_STAGES]
+# Label used INSIDE WhatsApp/Email template body variables.
+# Meta-approved template bodies often already include connector words like
+# "is now in {{3}}" — passing the full label "In Production" would render
+# "is now in In Production". So strip redundant connectors here.
+STAGE_TEMPLATE_LABEL = {
+    "pending_po": "Awaiting PO",
+    "po_received": "PO Received",
+    "proforma_issued": "Proforma Invoice Issued",
+    "order_placed": "Order Placed with Factory",
+    "raw_material_check": "Raw Material Check",
+    "procuring_raw_material": "Procuring Raw Material",
+    "in_production": "Production",  # template body has "in {{3}}"
+    "packaging": "Packaging",
+    "dispatched": "Dispatched",
+    "lr_received": "LR Received",
+    "delivered": "Delivered",
+}
 # Stages that trigger an auto-WhatsApp (template settings key + default field_2 text)
 AUTO_NOTIFY_STAGES = {
     "proforma_issued": "order_pi_template",
@@ -3026,7 +3048,8 @@ async def _order_auto_notify(order: dict, stage: str):
             email = email or (live.get("email") or "").strip()
     customer = order.get("contact_name") or order.get("contact_company") or "Customer"
     ord_no = order.get("order_number") or ""
-    stage_label = STAGE_TO_LABEL.get(stage, stage)
+    stage_label = STAGE_TO_LABEL.get(stage, stage)  # Used in email/audit copy
+    stage_template_label = STAGE_TEMPLATE_LABEL.get(stage, stage_label)  # Used in WA/email field_3
     docs = order.get("documents") or {}
 
     # Build the list of attachments for THIS stage
@@ -3079,7 +3102,7 @@ async def _order_auto_notify(order: dict, stage: str):
         try:
             extra: Dict[str, Any] = {
                 "field_2": ord_no,
-                "field_3": stage_label,
+                "field_3": stage_template_label,
                 "field_4": datetime.now().strftime("%d-%m-%Y %H:%M"),
             }
             if primary:
@@ -3148,7 +3171,7 @@ async def _order_auto_notify(order: dict, stage: str):
             attach_paths = [a["path"] for a in attachments if a.get("path")]
             import asyncio
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, _send_email_sync, sm, email, subject, body_text, attach_paths, body_html)
+            await loop.run_in_executor(None, _send_smtp_email, sm, email, subject, body_text, attach_paths, body_html)
             result["email"] = True
         except Exception as e:
             logger.exception(f"[Order notify] stage={stage} email failed")
@@ -3300,6 +3323,82 @@ class ProductionUpdateIn(BaseModel):
     note: str
 
 
+async def _notify_production_update(order: dict, note: str) -> Optional[dict]:
+    """Fire WA template (if configured) + branded email for an ad-hoc production update note.
+    The template body must accept body vars: {{1}}=customer, {{2}}=order#, {{3}}=note, {{4}}=timestamp."""
+    settings = await _get_integrations()
+    wa = settings["whatsapp"]
+    sm = settings["smtp"]
+    phone = order.get("contact_phone") or ""
+    email = (order.get("contact_email") or "").strip()
+    if (not phone or not email) and order.get("contact_id"):
+        live = await db.contacts.find_one({"id": order["contact_id"]}, {"_id": 0, "phone": 1, "email": 1})
+        if live:
+            phone = phone or live.get("phone") or ""
+            email = email or (live.get("email") or "").strip()
+    customer = order.get("contact_name") or order.get("contact_company") or "Customer"
+    ord_no = order.get("order_number") or ""
+    timestamp = datetime.now().strftime("%d-%m-%Y %H:%M")
+    result: Dict[str, Any] = {"kind": "production_update", "note": note, "whatsapp": False, "email": False, "at": now_iso()}
+
+    # ---- WhatsApp ----
+    tpl_name = (wa.get("order_production_update_template") or "").strip()
+    tpl_lang = wa.get("order_production_update_template_language") or "en"
+    if tpl_name and phone and wa.get("enabled") and wa.get("vendor_uid") and wa.get("token"):
+        try:
+            body = await _send_whatsapp_template(
+                wa, phone,
+                template_name=tpl_name,
+                template_language=tpl_lang,
+                field_1=customer,
+                extra={"field_2": ord_no, "field_3": note, "field_4": timestamp},
+            )
+            data = body.get("data") if isinstance(body, dict) else {}
+            result["whatsapp"] = True
+            result["wamid"] = data.get("wamid")
+            result["template"] = tpl_name
+        except HTTPException as e:
+            logger.error(f"[Prod update notify] WA failed: {e.detail}")
+            result["whatsapp_error"] = str(e.detail)
+        except Exception as e:
+            logger.exception("[Prod update notify] WA unexpected error")
+            result["whatsapp_error"] = str(e)
+
+    # ---- Email (always send if SMTP enabled & we have an email) ----
+    if email and sm.get("enabled") and sm.get("host") and sm.get("username") and sm.get("password") and sm.get("from_email"):
+        try:
+            subject = f"Production Update — {ord_no}"
+            body_text = (
+                f"Hello {customer},\n\nProduction update on your order {ord_no}:\n\n"
+                f"\"{note}\"\n\nUpdated: {timestamp}\n\nTrack your order live in our customer portal.\n\n"
+                "Team HRExporter\nAn ISO 9001:2015 Certified Company"
+            )
+            body_html = f"""<!doctype html>
+<html><body style="font-family:Arial,Helvetica,sans-serif;background:#f5f5f5;padding:32px 16px;margin:0;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e4e4e7;">
+<tr><td style="background:#1A1A1A;color:#FBAE17;padding:18px 24px;font-weight:800;letter-spacing:2px;font-size:11px;text-transform:uppercase;">HRE Exporter — Production Update</td></tr>
+<tr><td style="padding:28px 24px;">
+<p style="margin:0 0 6px;color:#71717a;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;font-weight:bold;">Order {ord_no}</p>
+<h2 style="margin:0 0 16px;color:#1A1A1A;font-size:20px;font-weight:900;">Production Update</h2>
+<p style="margin:0 0 18px;color:#3f3f46;font-size:14px;line-height:1.6;">Hello {customer}, here's the latest update from our production floor:</p>
+<blockquote style="margin:0 0 18px;padding:14px 16px;background:#fafafa;border-left:4px solid #FBAE17;color:#1A1A1A;font-size:15px;line-height:1.55;font-style:italic;">{note}</blockquote>
+<div style="background:#FBAE17;color:#1A1A1A;padding:10px 14px;font-family:'Courier New',monospace;font-size:12px;font-weight:bold;">UPDATED · {timestamp}</div>
+</td></tr>
+<tr><td style="background:#fafafa;color:#a1a1aa;padding:14px 24px;font-size:11px;text-align:center;border-top:1px solid #e4e4e7;">An ISO 9001:2015 Certified Company &middot; info@hrexporter.com</td></tr>
+</table></body></html>"""
+            import asyncio
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _send_smtp_email, sm, email, subject, body_text, None, body_html)
+            result["email"] = True
+        except Exception as e:
+            logger.exception("[Prod update notify] email failed")
+            result["email_error"] = str(e)
+
+    if not (result["whatsapp"] or result["email"] or result.get("whatsapp_error") or result.get("email_error")):
+        return None
+    return result
+
+
 @api.post("/orders/{oid}/production-update")
 async def add_production_update(oid: str, data: ProductionUpdateIn, user: dict = Depends(require_role("admin", "manager"))):
     if not data.note.strip():
@@ -3307,13 +3406,14 @@ async def add_production_update(oid: str, data: ProductionUpdateIn, user: dict =
     order = await db.orders.find_one({"id": oid}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    note = data.note.strip()
     entry = {
         "id": str(uuid.uuid4()),
-        "note": data.note.strip(),
+        "note": note,
         "at": now_iso(),
         "by": user["email"],
     }
-    ev = _timeline_event("production_update", data.note.strip(), user["email"])
+    ev = _timeline_event("production_update", note, user["email"])
     await db.orders.update_one(
         {"id": oid},
         {
@@ -3321,8 +3421,12 @@ async def add_production_update(oid: str, data: ProductionUpdateIn, user: dict =
             "$set": {"updated_at": now_iso(), "stage": "in_production" if order.get("stage") in ("order_placed", "raw_material_check", "procuring_raw_material") else order["stage"]},
         },
     )
-    updated = await db.orders.find_one({"id": oid}, {"_id": 0})
-    return updated
+    fresh = await db.orders.find_one({"id": oid}, {"_id": 0})
+    notify = await _notify_production_update(fresh, note)
+    if notify:
+        await db.orders.update_one({"id": oid}, {"$push": {"notifications": notify}})
+        fresh = await db.orders.find_one({"id": oid}, {"_id": 0})
+    return fresh
 
 
 class RawMaterialStatusIn(BaseModel):

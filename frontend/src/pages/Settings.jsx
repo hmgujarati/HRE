@@ -135,6 +135,7 @@ function WhatsAppTab({ canEdit }) {
   const pkgLangs = form.order_packaging_template && tplLangsByName[form.order_packaging_template] ? Array.from(tplLangsByName[form.order_packaging_template]) : [];
   const dispLangs = form.order_dispatched_template && tplLangsByName[form.order_dispatched_template] ? Array.from(tplLangsByName[form.order_dispatched_template]) : [];
   const lrLangs = form.order_lr_template && tplLangsByName[form.order_lr_template] ? Array.from(tplLangsByName[form.order_lr_template]) : [];
+  const prodUpdateLangs = form.order_production_update_template && tplLangsByName[form.order_production_update_template] ? Array.from(tplLangsByName[form.order_production_update_template]) : [];
   const poAdminLangs = form.po_received_admin_template && tplLangsByName[form.po_received_admin_template] ? Array.from(tplLangsByName[form.po_received_admin_template]) : [];
 
   return (
@@ -229,6 +230,16 @@ function WhatsAppTab({ canEdit }) {
             setForm({ ...form, order_lr_template: v, order_lr_template_language: langs[0] || form.order_lr_template_language || "en" });
           }} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
           <TemplateField label="LR Received Template Language" testId="wa-lr-template-lang" value={form.order_lr_template_language || ""} onChange={(v) => setForm({ ...form, order_lr_template_language: v })} options={lrLangs} disabled={!canEdit} placeholder="en or en_US" />
+
+          <div className="sm:col-span-2 border-t border-zinc-100 mt-1 pt-3">
+            <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Ad-hoc Production Updates</div>
+            <div className="text-xs text-zinc-500 mb-2">Fires when admin posts a free-form floor note (e.g. "plating process started"). Body vars: <span className="font-mono">{`{{1}}`}</span>=customer, <span className="font-mono">{`{{2}}`}</span>=order#, <span className="font-mono">{`{{3}}`}</span>=note text, <span className="font-mono">{`{{4}}`}</span>=timestamp. Email always fires when SMTP is enabled.</div>
+          </div>
+          <TemplateField label="Production Update Template" testId="wa-prod-update-template" value={form.order_production_update_template} onChange={(v) => {
+            const langs = tplLangsByName[v] ? Array.from(tplLangsByName[v]) : [];
+            setForm({ ...form, order_production_update_template: v, order_production_update_template_language: langs[0] || form.order_production_update_template_language || "en" });
+          }} options={tplNames} disabled={!canEdit} placeholder="leave blank → email only" />
+          <TemplateField label="Production Update Template Language" testId="wa-prod-update-template-lang" value={form.order_production_update_template_language || ""} onChange={(v) => setForm({ ...form, order_production_update_template_language: v })} options={prodUpdateLangs} disabled={!canEdit} placeholder="en or en_US" />
 
           <div className="sm:col-span-2 border-t border-zinc-200 mt-2 pt-4">
             <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Internal Admin Alerts</div>

@@ -116,6 +116,11 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Bug fixes — stage notifications + production updates (2026-05-10)
+- **Email not sending fix**: `_order_auto_notify` was calling `_send_email_sync` which doesn't exist; the actual function is `_send_smtp_email`. Renamed all 3 references. Confirmed with live test: production update on `HRE/ORD/2026-27/0003` now returns `email: True` (sent to hmgujarati@gmail.com).
+- **Duplicate "in" fix**: Approved Meta templates often hardcode "is now in {{3}}" in the body. Passing `STAGE_TO_LABEL["in_production"]="In Production"` produced "is now in In Production". Added `STAGE_TEMPLATE_LABEL` map that strips redundant connectors (in_production → "Production"). All other stages use the same label.
+- **Production-update notifications**: `POST /api/orders/{oid}/production-update` now fires email (always, when SMTP enabled) + WhatsApp (when `order_production_update_template` is configured). Email uses a branded HTML body with the note as a blockquote. New template fields in Settings: `order_production_update_template` + `_language`.
+
 ## Per-stage Template Languages + Email Stage-Notify + Tax Invoice Auto-Gen + Stronger Confirm (2026-05-10)
 - Each Phase 2C auto-notify template now has its own language field (`order_pi_template_language`, `order_production_template_language`, `order_packaging_template_language`, `order_dispatched_template_language`, `order_lr_template_language`). Same for `po_received_admin_template_language`. Settings UI auto-fills the language when admin selects a template name. Fixes "Template for the selected language not found" Meta error when individual templates are approved in different languages (e.g. quote in `en_US` but production in `en`).
 - `_order_auto_notify` rewritten: now sends BOTH WhatsApp + Email in parallel for every notify stage. Email includes branded HTML body + actual files attached (Tax Invoice, E-way Bill, LR Copy, PI). On `dispatched` stage, WhatsApp sends the template with Tax Invoice as document header, then a follow-up `send-media-message` carries the E-way Bill so customer receives BOTH attachments.
