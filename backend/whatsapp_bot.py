@@ -193,9 +193,59 @@ def parse_inbound(payload: dict) -> Optional[Dict[str, Any]]:
     if not isinstance(payload, dict):
         return None
 
-    contact_obj = payload.get("contact")
-    msg_obj = payload.get("message")
-    if isinstance(contact_obj, dict) and isinstance(msg_obj, dict):
+    # Shape 1 (real BizChat live payload): nested Meta envelope inside
+    # `whatsapp_webhook_payload.entry[].changes[].value.messages[]`.
+    # The top-level `message.body` only contains the visible TEXT (or for an
+    # interactive reply, just the row TITLE) — the actual `interactive.list_reply`
+    # / `button_reply` block with the row `id` is buried in the nested payload.
+    contact_obj = payload.get("contact") if isinstance(payload.get("contact"), dict) else {}
+    msg_obj = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+    nested = payload.get("whatsapp_webhook_payload")
+    if isinstance(nested, dict) and (contact_obj or msg_obj):
+        try:
+            entries = nested.get("entry") or []
+            for entry in entries:
+                for change in (entry.get("changes") or []):
+                    val = change.get("value") or {}
+                    for nm in (val.get("messages") or []):
+                        from_phone = (nm.get("from")
+                                      or contact_obj.get("phone_number")
+                                      or contact_obj.get("phone"))
+                        if not from_phone:
+                            continue
+                        wamid = nm.get("id") or msg_obj.get("whatsapp_message_id")
+                        text = ""
+                        selection_id = ""
+                        if nm.get("type") == "interactive" and isinstance(nm.get("interactive"), dict):
+                            inter = nm["interactive"]
+                            inter_type = inter.get("type") or ""
+                            if inter_type == "list_reply" and isinstance(inter.get("list_reply"), dict):
+                                selection_id = inter["list_reply"].get("id") or ""
+                                text = inter["list_reply"].get("title") or ""
+                            elif inter_type == "button_reply" and isinstance(inter.get("button_reply"), dict):
+                                selection_id = inter["button_reply"].get("id") or ""
+                                text = inter["button_reply"].get("title") or ""
+                        elif nm.get("type") == "text" and isinstance(nm.get("text"), dict):
+                            text = (nm["text"].get("body") or "").strip()
+                        elif nm.get("type") == "button" and isinstance(nm.get("button"), dict):
+                            # Template-quick-reply button (legacy shape)
+                            selection_id = nm["button"].get("payload") or ""
+                            text = nm["button"].get("text") or ""
+                        # Fall back to top-level body if we found nothing
+                        if not text and not selection_id:
+                            text = (msg_obj.get("body") or "").strip()
+                        return {
+                            "phone": str(from_phone),
+                            "phone_norm": _norm_phone_local(str(from_phone)),
+                            "text": (text or "").strip(),
+                            "selection_id": (selection_id or "").strip(),
+                            "wamid": wamid,
+                        }
+        except Exception:
+            logger.exception("[parse_inbound] failed to walk whatsapp_webhook_payload")
+
+    # Shape 2 (BizChat simple inbound): { contact: { phone_number }, message: { body, interactive, ... } }
+    if isinstance(contact_obj, dict) and isinstance(msg_obj, dict) and msg_obj:
         from_phone = contact_obj.get("phone_number") or contact_obj.get("phone")
         if from_phone:
             wamid = msg_obj.get("whatsapp_message_id") or msg_obj.get("wamid") or msg_obj.get("id")
@@ -217,7 +267,7 @@ def parse_inbound(payload: dict) -> Optional[Dict[str, Any]]:
                 "wamid": wamid,
             }
 
-    # Generic Meta-style fallback
+    # Shape 3 (Meta-style or our test fixtures): walk wrappers
     body = payload
     from_phone = None
     for key in ("data", "payload", "event"):

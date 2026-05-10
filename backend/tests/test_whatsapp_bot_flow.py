@@ -65,6 +65,45 @@ def test_size_parser():
     assert wb.parse_first_number("approx 4.5 mm") == 4.5
 
 
+def test_parse_inbound_real_bizchat_list_reply():
+    """REGRESSION: Live BizChat envelope nests interactive.list_reply inside
+    `whatsapp_webhook_payload.entry[].changes[].value.messages[]`. The top-level
+    message.body only carries the row TITLE, not the row id — so parser must
+    walk the nested envelope to recover `fam:<uuid>` selections."""
+    importlib.reload(wb)
+    payload = {
+        "contact": {"phone_number": "918200663263"},
+        "message": {"is_new_message": True, "body": "CRIMPING TYPE TINNED COP"},
+        "whatsapp_webhook_payload": {"entry": [{"changes": [{"value": {"messages": [{
+            "from": "918200663263", "id": "wamid.x", "type": "interactive",
+            "interactive": {"type": "list_reply",
+                "list_reply": {"id": "fam:2c0d529d", "title": "CRIMPING TYPE TINNED COP"}}
+        }]}}]}]},
+    }
+    r = wb.parse_inbound(payload)
+    assert r["selection_id"] == "fam:2c0d529d", r
+    assert r["phone_norm"] == "918200663263"
+
+    # button_reply variant
+    payload2 = {
+        "contact": {"phone_number": "918200663263"},
+        "message": {"is_new_message": True, "body": "Copper"},
+        "whatsapp_webhook_payload": {"entry": [{"changes": [{"value": {"messages": [{
+            "from": "918200663263", "id": "wamid.y", "type": "interactive",
+            "interactive": {"type": "button_reply",
+                "button_reply": {"id": "1", "title": "Copper"}}
+        }]}}]}]},
+    }
+    r2 = wb.parse_inbound(payload2)
+    assert r2["selection_id"] == "1" and r2["text"] == "Copper"
+
+    # Backwards-compat: old data-envelope shape still works
+    old = {"data": {"from": "918980004416", "message": {"type": "interactive",
+            "interactive": {"button_reply": {"id": "1", "title": "Get a Quote"}}}}}
+    r3 = wb.parse_inbound(old)
+    assert r3["selection_id"] == "1" and r3["text"] == "Get a Quote"
+
+
 def test_handoff_keyword_short_circuits():
     importlib.reload(wb)
     db = _db()
