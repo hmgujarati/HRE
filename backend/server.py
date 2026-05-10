@@ -3342,8 +3342,16 @@ async def _notify_production_update(order: dict, note: str) -> Optional[dict]:
     result: Dict[str, Any] = {"kind": "production_update", "note": note, "whatsapp": False, "email": False, "at": now_iso()}
 
     # ---- WhatsApp ----
-    tpl_name = (wa.get("order_production_update_template") or "").strip()
-    tpl_lang = wa.get("order_production_update_template_language") or "en"
+    # Use the dedicated production-update template if configured; otherwise fall
+    # back to the existing approved 'order_production_template' (the same one
+    # that fires when stage moves to In Production). Passing the note text as
+    # {{3}} reuses the approved body without needing fresh Meta approval.
+    tpl_name = (wa.get("order_production_update_template") or wa.get("order_production_template") or "").strip()
+    tpl_lang = (
+        wa.get("order_production_update_template_language")
+        if wa.get("order_production_update_template")
+        else wa.get("order_production_template_language")
+    ) or "en"
     if tpl_name and phone and wa.get("enabled") and wa.get("vendor_uid") and wa.get("token"):
         try:
             body = await _send_whatsapp_template(
