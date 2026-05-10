@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import {
   ArrowLeft, FileArrowUp, FileText, Package, Truck, ClipboardText,
   CheckCircle, Clock, PaperPlaneTilt, ArrowRight, FileArrowDown, WhatsappLogo,
+  ArrowClockwise, EnvelopeSimple,
 } from "@phosphor-icons/react";
 import { StageBadge, STAGE_LABELS, STAGE_ORDER } from "./Orders";
 
@@ -92,6 +93,21 @@ export default function OrderView() {
     try {
       await api.put(`/orders/${id}/expected-completion`, { date: date || null });
       toast.success(date ? "Expected completion date saved" : "Expected completion date cleared");
+      load();
+    } catch (e) { toast.error(formatApiError(e?.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+
+  const refireNotification = async () => {
+    if (!window.confirm("Re-send the most recent customer notification on WhatsApp + Email?\n\nThis will not advance the stage — only re-fire the last update.")) return;
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/orders/${id}/refire-notification`);
+      const last = (data.notifications || []).slice(-1)[0] || {};
+      const channels = [];
+      if (last.whatsapp) channels.push("WhatsApp");
+      if (last.email) channels.push("Email");
+      toast.success(channels.length ? `Re-fired on ${channels.join(" + ")}` : "Re-fire attempted — see logs");
       load();
     } catch (e) { toast.error(formatApiError(e?.response?.data?.detail)); }
     finally { setBusy(false); }
@@ -214,22 +230,53 @@ export default function OrderView() {
 
           {(order.notifications || []).length > 0 && (
             <div className="border border-zinc-200 bg-white">
-              <div className="px-5 py-4 border-b border-zinc-200">
-                <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Auto Notifications</div>
-                <h3 className="font-heading font-black text-lg">WhatsApp pings</h3>
+              <div className="px-5 py-4 border-b border-zinc-200 flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Auto Notifications</div>
+                  <h3 className="font-heading font-black text-lg">Customer pings</h3>
+                </div>
+                <button
+                  onClick={refireNotification}
+                  disabled={busy}
+                  data-testid="refire-notification-btn"
+                  className="text-[10px] uppercase tracking-wider font-bold bg-[#1A1A1A] hover:bg-black text-white px-3 py-2 disabled:opacity-50 flex items-center gap-1.5"
+                  title="Re-send the most recent stage / production-update notification on WhatsApp + Email"
+                >
+                  <ArrowClockwise size={12} weight="bold" /> Re-fire last
+                </button>
               </div>
               <div className="p-5 space-y-2 text-xs">
-                {[...order.notifications].reverse().map((n, i) => (
-                  <div key={i} className="border-l-2 border-emerald-400 pl-3 py-1">
-                    <div className="flex items-center gap-2">
-                      <WhatsappLogo size={12} weight="fill" className="text-[#25D366]" />
-                      <span className="font-bold uppercase tracking-wider text-[10px]">{STAGE_LABELS[n.stage] || n.stage}</span>
-                      <span className={`px-2 py-0.5 text-[9px] uppercase tracking-wider font-bold ${n.error ? "bg-red-100 text-red-800" : "bg-emerald-100 text-emerald-800"}`}>{n.error ? "failed" : (n.status || "sent")}</span>
+                {[...order.notifications].reverse().map((n, i) => {
+                  const isProdUpdate = n.kind === "production_update";
+                  const waBadge = n.whatsapp ? "sent" : (n.whatsapp_error ? "failed" : "—");
+                  const emBadge = n.email ? "sent" : (n.email_error ? "failed" : "—");
+                  return (
+                    <div key={i} className={`border-l-2 ${n.whatsapp || n.email ? "border-emerald-400" : "border-red-400"} pl-3 py-1.5`}>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold uppercase tracking-wider text-[10px]">{isProdUpdate ? "Floor update" : (STAGE_LABELS[n.stage] || n.stage)}</span>
+                        {n.refire_of && <span className="text-[9px] uppercase tracking-wider font-bold bg-zinc-100 text-zinc-600 px-1.5 py-0.5">re-fire</span>}
+                        <span className="text-[10px] text-zinc-500 ml-auto font-mono">{n.at ? new Date(n.at).toLocaleString() : ""}</span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1">
+                        <span className="flex items-center gap-1">
+                          <WhatsappLogo size={11} weight="fill" className={n.whatsapp ? "text-[#25D366]" : "text-zinc-300"} />
+                          <span className={`text-[10px] uppercase tracking-wider font-bold ${n.whatsapp ? "text-emerald-700" : (n.whatsapp_error ? "text-red-600" : "text-zinc-400")}`}>WA · {waBadge}</span>
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <EnvelopeSimple size={11} weight="fill" className={n.email ? "text-[#FBAE17]" : "text-zinc-300"} />
+                          <span className={`text-[10px] uppercase tracking-wider font-bold ${n.email ? "text-emerald-700" : (n.email_error ? "text-red-600" : "text-zinc-400")}`}>Email · {emBadge}</span>
+                        </span>
+                      </div>
+                      {isProdUpdate && n.note && <div className="text-zinc-600 text-[11px] mt-1 italic">"{n.note}"</div>}
+                      {(n.whatsapp_error || n.email_error) && (
+                        <div className="text-red-600 text-[10px] mt-1 leading-snug">
+                          {n.whatsapp_error && <div>WA: {n.whatsapp_error}</div>}
+                          {n.email_error && <div>Email: {n.email_error}</div>}
+                        </div>
+                      )}
                     </div>
-                    <div className="text-zinc-500 font-mono text-[10px] mt-0.5 truncate" title={n.template}>{n.template}</div>
-                    {n.error && <div className="text-red-600 text-[10px]">{n.error}</div>}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

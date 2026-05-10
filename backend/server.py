@@ -2011,6 +2011,68 @@ async def list_whatsapp_templates(_: dict = Depends(require_role("admin", "manag
     return body
 
 
+@api.post("/settings/whatsapp/sync-template-languages")
+async def sync_whatsapp_template_languages(_: dict = Depends(require_role("admin", "manager"))):
+    """For every stored *_template field in the whatsapp settings, query BizChat
+    for the actual approved language(s) and update the matching *_template_language
+    field in DB. Self-heals language mismatches without manual dropdown work."""
+    cur = await _get_integrations()
+    wa = dict(cur["whatsapp"] or {})
+    body = await _fetch_whatsapp_templates(wa)
+    # Build a name → language(s) map from BizChat's response. Real shape is:
+    # { result, message, data: { templateList: { data: [{ template_name, language, status, category }] } } }
+    items: List[Any] = []
+    if isinstance(body, dict):
+        items = (((body.get("data") or {}).get("templateList") or {}).get("data") or [])
+        if not items:
+            items = body.get("data") if isinstance(body.get("data"), list) else []
+        if not items:
+            items = body.get("templates") or []
+    elif isinstance(body, list):
+        items = body
+    name_to_lang: Dict[str, str] = {}
+    for t in items:
+        if not isinstance(t, dict): continue
+        if t.get("status") and t.get("status") != "APPROVED":
+            continue  # skip non-approved
+        name = (t.get("template_name") or t.get("name") or "").strip()
+        lang = (t.get("language") or t.get("template_language") or "").strip()
+        if name and lang and name not in name_to_lang:
+            name_to_lang[name] = lang
+    # Pairs of (template name field, language field)
+    pairs = [
+        ("otp_template_name", "otp_template_language"),
+        ("quote_template_name", "quote_template_language"),
+        ("order_pi_template", "order_pi_template_language"),
+        ("order_production_template", "order_production_template_language"),
+        ("order_packaging_template", "order_packaging_template_language"),
+        ("order_dispatched_template", "order_dispatched_template_language"),
+        ("order_lr_template", "order_lr_template_language"),
+        ("order_production_update_template", "order_production_update_template_language"),
+        ("po_received_admin_template", "po_received_admin_template_language"),
+    ]
+    updated: Dict[str, str] = {}
+    skipped: List[str] = []
+    for name_key, lang_key in pairs:
+        tpl = (wa.get(name_key) or "").strip()
+        if not tpl:
+            continue
+        new_lang = name_to_lang.get(tpl)
+        if not new_lang:
+            skipped.append(f"{tpl} (not found in BizChat)")
+            continue
+        old_lang = (wa.get(lang_key) or "").strip()
+        if new_lang != old_lang:
+            wa[lang_key] = new_lang
+            updated[lang_key] = new_lang
+    if updated:
+        await db.settings.update_one(
+            {"id": "integrations"},
+            {"$set": {f"whatsapp.{k}": v for k, v in updated.items()} | {"updated_at": now_iso()}},
+        )
+    return {"updated": updated, "skipped": skipped, "templates_found": len(name_to_lang)}
+
+
 # ---------- Webhook receiver for BizChat status events ----------
 def _extract_status_events(payload: Any) -> List[Dict[str, Any]]:
     """Return a list of {wamid, status, timestamp?} dicts from a webhook payload.
@@ -3853,6 +3915,35 @@ async def upload_lr(
         await db.orders.update_one({"id": oid}, {"$push": {"notifications": notify}})
         updated = await db.orders.find_one({"id": oid}, {"_id": 0})
     return updated
+
+
+@api.post("/orders/{oid}/refire-notification")
+async def refire_order_notification(oid: str, user: dict = Depends(require_role("admin", "manager"))):
+    """Re-fire the most recent customer notification (stage advance OR production
+    update) for this order. Useful when WA/email failed earlier or the customer
+    asks for a re-send. Does NOT advance the stage."""
+    order = await db.orders.find_one({"id": oid}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    notifs = order.get("notifications") or []
+    if not notifs:
+        raise HTTPException(status_code=400, detail="No notifications have been fired yet for this order. Advance the stage or post a production update first.")
+    last = notifs[-1]
+    kind = last.get("kind") or ("stage" if last.get("stage") else None)
+    if kind == "production_update":
+        notify = await _notify_production_update(order, last.get("note") or "(repeat)")
+    else:
+        # Treat as a stage notification — re-derive stage from notification log
+        stage = last.get("stage") or order.get("stage")
+        notify = await _order_auto_notify(order, stage)
+        if notify:
+            notify["stage"] = stage
+    if not notify:
+        raise HTTPException(status_code=400, detail="Nothing to send — channels (WhatsApp + Email) are not configured. Enable them in Settings first.")
+    notify["at"] = now_iso()
+    notify["refire_of"] = last.get("at")
+    await db.orders.update_one({"id": oid}, {"$push": {"notifications": notify}})
+    return await db.orders.find_one({"id": oid}, {"_id": 0})
 
 
 @api.delete("/orders/{oid}")

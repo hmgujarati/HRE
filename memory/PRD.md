@@ -116,6 +116,11 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Re-fire Notifications + Auto Language Sync (2026-05-10)
+- New endpoint `POST /api/settings/whatsapp/sync-template-languages` queries BizChat's template list and auto-overwrites every stale `*_template_language` field with the actual approved language. Triggered automatically when admin clicks "Load Templates" in Settings UI. Live-tested: 4 stage template languages (`order_pi/packaging/dispatched/lr_template_language`) auto-flipped from `en` → `en_US`, fixing the live "Template language not found" failures.
+- New endpoint `POST /api/orders/{oid}/refire-notification` re-fires the most recent stage or production-update notification (WhatsApp + Email) for an order without advancing the stage. Stamps `refire_of` on the new entry for audit. Useful when a previous send failed or customer asks for a re-send. Live-tested on HRE/ORD/2026-27/0003 after language sync — both channels delivered (`whatsapp: True, email: True`).
+- OrderView "Auto Notifications" panel rebuilt: now shows BOTH WA + Email status pills per row (sent/failed/—), kind label (stage vs floor update), production note quote, error details inline, and a "Re-fire last" button at the top of the panel.
+
 ## Expected Completion Date + Doc Guards on Stage Advance (2026-05-10)
 - New field `expected_completion_date` on orders (YYYY-MM-DD). New endpoint `PUT /api/orders/{oid}/expected-completion`. Frontend: editable card on OrderView with Set/Change/Clear actions.
 - Notifications enriched: when ETA is set, both WhatsApp `{{4}}` (Updated:) and Email body now show `· Expected completion: 25-Jun-2026`. Email also has a black/yellow ETA badge below the timestamp. No Meta template re-approval needed — fits inside the existing `{{4}}` slot.

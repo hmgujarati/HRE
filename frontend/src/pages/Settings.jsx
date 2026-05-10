@@ -81,7 +81,20 @@ function WhatsAppTab({ canEdit }) {
       const list = data?.data?.templateList?.data || data?.data || data?.templates || (Array.isArray(data) ? data : []);
       const approved = (Array.isArray(list) ? list : []).filter((t) => !t.status || t.status === "APPROVED");
       setTemplates(approved);
-      toast.success(`Loaded ${approved.length} approved template${approved.length === 1 ? '' : 's'}`);
+      // Auto-sync template languages: query the backend to overwrite stale languages with whatever Meta says
+      try {
+        const { data: sync } = await api.post("/settings/whatsapp/sync-template-languages");
+        const fixedCount = Object.keys(sync.updated || {}).length;
+        toast.success(`Loaded ${approved.length} template${approved.length === 1 ? '' : 's'}${fixedCount ? `, auto-fixed ${fixedCount} language mismatch${fixedCount === 1 ? '' : 'es'}` : ''}`);
+        if (fixedCount) {
+          // Refresh form so the dropdowns show the new language values
+          const { data: fresh } = await api.get("/settings/integrations");
+          setData(fresh);
+          setForm({ ...fresh.whatsapp, token: "" });
+        }
+      } catch {
+        toast.success(`Loaded ${approved.length} approved template${approved.length === 1 ? '' : 's'}`);
+      }
     } catch (err) {
       toast.error(formatApiError(err?.response?.data?.detail));
       setTemplates([]);
