@@ -1395,13 +1395,19 @@ DEFAULT_INTEGRATIONS = {
         "webhook_secret": "",
         # Order tracking auto-notify templates (Phase 2C)
         "order_pi_template": "",
+        "order_pi_template_language": "en",
         "order_production_template": "",
+        "order_production_template_language": "en",
         "order_packaging_template": "",
+        "order_packaging_template_language": "en",
         "order_dispatched_template": "",
+        "order_dispatched_template_language": "en",
         "order_lr_template": "",
+        "order_lr_template_language": "en",
         # Internal admin alert when customer submits a PO (Phase 2C-customer)
         "admin_notify_phone": "",
         "po_received_admin_template": "",
+        "po_received_admin_template_language": "en",
     },
     "smtp": {
         "enabled": False,
@@ -1882,12 +1888,18 @@ class WhatsAppSettingsIn(BaseModel):
     quote_template_name: str = ""
     quote_template_language: str = "en"
     order_pi_template: str = ""
+    order_pi_template_language: str = "en"
     order_production_template: str = ""
+    order_production_template_language: str = "en"
     order_packaging_template: str = ""
+    order_packaging_template_language: str = "en"
     order_dispatched_template: str = ""
+    order_dispatched_template_language: str = "en"
     order_lr_template: str = ""
+    order_lr_template_language: str = "en"
     admin_notify_phone: str = ""
     po_received_admin_template: str = ""
+    po_received_admin_template_language: str = "en"
     webhook_secret_rotate: Optional[bool] = False  # non-persisted: trigger fresh secret
 
 
@@ -2722,7 +2734,7 @@ async def _notify_admin_po_received(order: dict, quote: dict, contact: dict, has
             await _send_whatsapp_template(
                 wa, admin_phone,
                 template_name=tpl_name,
-                template_language=wa.get("quote_template_language") or "en",
+                template_language=wa.get("po_received_admin_template_language") or wa.get("quote_template_language") or "en",
                 field_1=customer,
                 extra=extra,
             )
@@ -2960,6 +2972,20 @@ async def _next_pi_number() -> str:
     return f"{prefix}{seq:04d}"
 
 
+async def _next_invoice_number() -> str:
+    year = _now_dt().year
+    fy_start = year if _now_dt().month >= 4 else year - 1
+    prefix = f"HRE/INV/{fy_start}-{(fy_start+1) % 100:02d}/"
+    last = await db.orders.find({"documents.invoice.number": {"$regex": f"^{re.escape(prefix)}"}}, {"_id": 0, "documents": 1}).sort("documents.invoice.number", -1).to_list(length=1)
+    seq = 1
+    if last:
+        try:
+            seq = int(last[0]["documents"]["invoice"]["number"].split("/")[-1]) + 1
+        except Exception:
+            pass
+    return f"{prefix}{seq:04d}"
+
+
 def _timeline_event(kind: str, label: str, user_email: str, **extra) -> dict:
     return {
         "id": str(uuid.uuid4()),
@@ -2972,65 +2998,166 @@ def _timeline_event(kind: str, label: str, user_email: str, **extra) -> dict:
 
 
 async def _order_auto_notify(order: dict, stage: str):
-    """Fire a WhatsApp template if the stage has a configured template name."""
+    """Fire WhatsApp + Email customer notifications for the given stage.
+
+    WhatsApp: uses the per-stage template + per-stage language. On `dispatched`,
+    also sends a follow-up `send-media-message` carrying the second document
+    (so customer receives BOTH tax invoice AND e-way bill).
+
+    Email: branded HTML body listing the stage update, with all relevant
+    documents attached as actual files (tax invoice, e-way bill, LR copy, PI).
+    """
     settings = await _get_integrations()
     wa = settings["whatsapp"]
+    sm = settings["smtp"]
     tpl_key = AUTO_NOTIFY_STAGES.get(stage)
     if not tpl_key:
         return None
     tpl_name = wa.get(tpl_key)
-    if not tpl_name:
-        return None
-    if not (wa.get("enabled") and wa.get("vendor_uid") and wa.get("token")):
-        return None
+    tpl_lang_key = f"{tpl_key}_language"
+    tpl_lang = wa.get(tpl_lang_key) or wa.get("quote_template_language") or "en"
     phone = order.get("contact_phone") or ""
-    if not phone:
-        return None
+    email = (order.get("contact_email") or "").strip()
+    # Live fallback if frozen contact info is empty
+    if (not phone or not email) and order.get("contact_id"):
+        live = await db.contacts.find_one({"id": order["contact_id"]}, {"_id": 0, "phone": 1, "email": 1})
+        if live:
+            phone = phone or live.get("phone") or ""
+            email = email or (live.get("email") or "").strip()
     customer = order.get("contact_name") or order.get("contact_company") or "Customer"
     ord_no = order.get("order_number") or ""
     stage_label = STAGE_TO_LABEL.get(stage, stage)
-    # Extra attachment URL (e.g., LR copy, invoice etc.)
-    latest_doc_url = None
-    latest_doc_name = None
-    # Pick the newest attachment relevant to this stage
     docs = order.get("documents") or {}
-    if stage == "dispatched":
-        inv = docs.get("invoice"); eway = docs.get("eway_bill")
-        latest_doc_url = (inv or {}).get("url") or (eway or {}).get("url")
-        latest_doc_name = (inv or {}).get("filename") or (eway or {}).get("filename")
+
+    # Build the list of attachments for THIS stage
+    attachments: List[dict] = []  # [{url, filename, label, path}]
+
+    def add_doc(meta: Optional[dict], label: str):
+        if not meta:
+            return
+        url = (meta or {}).get("url")
+        fn = (meta or {}).get("filename")
+        if not (url and fn):
+            return
+        # Resolve a local path so we can attach to email
+        local_path = UPLOAD_DIR / "orders" / order["id"] / fn
+        attachments.append({
+            "url": url,
+            "filename": fn,
+            "label": label,
+            "path": local_path if local_path.exists() else None,
+        })
+
+    if stage == "proforma_issued":
+        pi = order.get("proforma") or {}
+        if pi.get("url") and pi.get("filename"):
+            local_path = UPLOAD_DIR / "orders" / order["id"] / pi["filename"]
+            attachments.append({
+                "url": pi["url"], "filename": pi["filename"],
+                "label": "Proforma Invoice",
+                "path": local_path if local_path.exists() else None,
+            })
+    elif stage == "dispatched":
+        add_doc(docs.get("invoice"), "Tax Invoice")
+        add_doc(docs.get("eway_bill"), "E-way Bill")
     elif stage == "lr_received":
-        lr = docs.get("lr")
-        latest_doc_url = (lr or {}).get("url")
-        latest_doc_name = (lr or {}).get("filename")
-    elif stage == "proforma_issued":
-        pi = (order.get("proforma") or {})
-        latest_doc_url = pi.get("url")
-        latest_doc_name = pi.get("filename")
-    try:
-        extra: Dict[str, Any] = {
-            "field_2": ord_no,
-            "field_3": stage_label,
-            "field_4": datetime.now().strftime("%d-%m-%Y %H:%M"),
-        }
-        if latest_doc_url:
-            extra["header_document"] = latest_doc_url
-            extra["header_document_name"] = latest_doc_name or "document.pdf"
-        body = await _send_whatsapp_template(
-            wa, phone,
-            template_name=tpl_name,
-            template_language=wa.get("quote_template_language") or "en",
-            field_1=customer,
-            extra=extra,
-        )
-        data = body.get("data") if isinstance(body, dict) else {}
-        return {
-            "wamid": data.get("wamid"),
-            "template": tpl_name,
-            "status": data.get("status") or "sent",
-        }
-    except Exception as e:
-        logger.exception(f"[Order notify] stage={stage} failed")
-        return {"error": str(e), "template": tpl_name, "status": "failed"}
+        add_doc(docs.get("lr"), "LR Copy")
+    # in_production / packaging — no attachments
+
+    primary = attachments[0] if attachments else None
+    secondary = attachments[1] if len(attachments) > 1 else None
+
+    result: Dict[str, Any] = {
+        "template": tpl_name,
+        "stage": stage,
+        "whatsapp": False,
+        "email": False,
+    }
+
+    # ---- WhatsApp ----
+    if tpl_name and phone and wa.get("enabled") and wa.get("vendor_uid") and wa.get("token"):
+        try:
+            extra: Dict[str, Any] = {
+                "field_2": ord_no,
+                "field_3": stage_label,
+                "field_4": datetime.now().strftime("%d-%m-%Y %H:%M"),
+            }
+            if primary:
+                extra["header_document"] = primary["url"]
+                extra["header_document_name"] = primary["filename"]
+            body = await _send_whatsapp_template(
+                wa, phone,
+                template_name=tpl_name,
+                template_language=tpl_lang,
+                field_1=customer,
+                extra=extra,
+            )
+            data = body.get("data") if isinstance(body, dict) else {}
+            result["whatsapp"] = True
+            result["wamid"] = data.get("wamid")
+            result["status"] = data.get("status") or "sent"
+            # Follow-up: ship the second document via send-media-message
+            if secondary:
+                try:
+                    await _send_whatsapp_document(
+                        wa, phone,
+                        media_url=secondary["url"],
+                        file_name=secondary["filename"],
+                        caption=f"{secondary['label']} — Order {ord_no}",
+                    )
+                    result["whatsapp_secondary"] = True
+                except Exception as e:
+                    logger.warning(f"[Order notify] secondary WA doc failed: {e}")
+                    result["whatsapp_secondary_error"] = str(e)
+        except HTTPException as e:
+            logger.error(f"[Order notify] stage={stage} WA failed: {e.detail}")
+            result["whatsapp_error"] = str(e.detail)
+        except Exception as e:
+            logger.exception(f"[Order notify] stage={stage} WA unexpected error")
+            result["whatsapp_error"] = str(e)
+
+    # ---- Email ----
+    if email and sm.get("enabled") and sm.get("host") and sm.get("username") and sm.get("password") and sm.get("from_email"):
+        try:
+            subject = f"Order Update — {ord_no} · {stage_label}"
+            attach_list_html = ""
+            if attachments:
+                items = "".join(f"<li>{a['label']} — <span style='color:#71717a'>{a['filename']}</span></li>" for a in attachments)
+                attach_list_html = f"<p style='margin:18px 0 4px;color:#1A1A1A;font-weight:bold;font-size:13px;'>Attached:</p><ul style='margin:0;padding-left:18px;color:#3f3f46;font-size:13px;line-height:1.7;'>{items}</ul>"
+            body_text = (
+                f"Hello {customer},\n\n"
+                f"Your order {ord_no} has moved to: {stage_label}.\n"
+                f"Updated: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n\n"
+                + ("Documents attached:\n" + "\n".join(f"  - {a['label']}" for a in attachments) + "\n\n" if attachments else "")
+                + "Track your order live in our customer portal.\n\nTeam HRExporter\nAn ISO 9001:2015 Certified Company"
+            )
+            body_html = f"""<!doctype html>
+<html><body style="font-family:Arial,Helvetica,sans-serif;background:#f5f5f5;padding:32px 16px;margin:0;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e4e4e7;">
+<tr><td style="background:#1A1A1A;color:#FBAE17;padding:18px 24px;font-weight:800;letter-spacing:2px;font-size:11px;text-transform:uppercase;">HRE Exporter — Order Update</td></tr>
+<tr><td style="padding:28px 24px;">
+<p style="margin:0 0 6px;color:#71717a;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;font-weight:bold;">Order {ord_no}</p>
+<h2 style="margin:0 0 16px;color:#1A1A1A;font-size:22px;font-weight:900;">{stage_label}</h2>
+<p style="margin:0 0 18px;color:#3f3f46;font-size:14px;line-height:1.6;">Hello {customer},<br/>Your order has moved to <b>{stage_label}</b>.</p>
+<div style="background:#FBAE17;color:#1A1A1A;padding:10px 14px;font-family:'Courier New',monospace;font-size:12px;font-weight:bold;">UPDATED · {datetime.now().strftime('%d-%m-%Y %H:%M')}</div>
+{attach_list_html}
+</td></tr>
+<tr><td style="background:#fafafa;color:#a1a1aa;padding:14px 24px;font-size:11px;text-align:center;border-top:1px solid #e4e4e7;">An ISO 9001:2015 Certified Company &middot; info@hrexporter.com</td></tr>
+</table></body></html>"""
+            # Attach actual files (skip ones whose local path doesn't exist)
+            attach_paths = [a["path"] for a in attachments if a.get("path")]
+            import asyncio
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _send_email_sync, sm, email, subject, body_text, attach_paths, body_html)
+            result["email"] = True
+        except Exception as e:
+            logger.exception(f"[Order notify] stage={stage} email failed")
+            result["email_error"] = str(e)
+
+    # If nothing actually went out, return None to keep notifications log clean
+    if not (result["whatsapp"] or result["email"] or result.get("whatsapp_error") or result.get("email_error")):
+        return None
+    return result
 
 
 def _mint_order_from_quote(quote: dict, user_email: str, po_number: Optional[str] = None) -> dict:
@@ -3345,6 +3472,52 @@ async def generate_proforma(oid: str, user: dict = Depends(require_role("admin",
         await db.orders.update_one({"id": oid}, {"$push": {"notifications": notify}})
         updated = await db.orders.find_one({"id": oid}, {"_id": 0})
     return updated
+
+
+@api.post("/orders/{oid}/invoice/generate")
+async def generate_invoice(oid: str, user: dict = Depends(require_role("admin", "manager"))):
+    """Auto-generate the Tax Invoice PDF from the order's line items.
+    Saves into documents.invoice with a fresh HRE/INV/{FY}/{NNNN} number unless one exists."""
+    order = await db.orders.find_one({"id": oid}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    from quote_pdf import render_quote_pdf
+    existing_inv = (order.get("documents") or {}).get("invoice") or {}
+    inv_no = existing_inv.get("number") or await _next_invoice_number()
+    out_dir = UPLOAD_DIR / "orders" / oid
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", inv_no)
+    ts = _now_dt().strftime("%Y%m%d%H%M%S")
+    out = out_dir / f"invoice_{safe}_{ts}.pdf"
+    doc_src = {
+        **order,
+        "quote_number": inv_no,
+        "created_at": now_iso(),
+        "valid_until": None,
+        "notes": order.get("notes") or "",
+        "terms": "PAYMENT: As per Proforma Invoice and PO terms.\nPrices are inclusive of taxes as applicable.\nGoods once dispatched will not be taken back.",
+    }
+    logo = UPLOAD_DIR.parent.parent / "frontend" / "public" / "hre-logo-light-bg.png"
+    logo_url = logo.as_uri() if logo.exists() else None
+    import asyncio
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, lambda: render_quote_pdf(doc_src, out, logo_url, "TAX INVOICE"))
+    public_url = f"{PUBLIC_BASE_URL}/api/uploads/orders/{oid}/{out.name}" if PUBLIC_BASE_URL else f"/api/uploads/orders/{oid}/{out.name}"
+    invoice = {
+        "filename": out.name,
+        "original_name": out.name,
+        "url": public_url,
+        "uploaded_at": now_iso(),
+        "uploaded_by": user["email"],
+        "number": inv_no,
+        "source": "generated",
+    }
+    ev = _timeline_event("document", f"Tax Invoice {inv_no} generated", user["email"], doc_key="invoice")
+    await db.orders.update_one(
+        {"id": oid},
+        {"$set": {"documents.invoice": invoice, "updated_at": now_iso()}, "$push": {"timeline": ev}},
+    )
+    return await db.orders.find_one({"id": oid}, {"_id": 0})
 
 
 @api.post("/orders/{oid}/proforma/upload")

@@ -116,6 +116,12 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Per-stage Template Languages + Email Stage-Notify + Tax Invoice Auto-Gen + Stronger Confirm (2026-05-10)
+- Each Phase 2C auto-notify template now has its own language field (`order_pi_template_language`, `order_production_template_language`, `order_packaging_template_language`, `order_dispatched_template_language`, `order_lr_template_language`). Same for `po_received_admin_template_language`. Settings UI auto-fills the language when admin selects a template name. Fixes "Template for the selected language not found" Meta error when individual templates are approved in different languages (e.g. quote in `en_US` but production in `en`).
+- `_order_auto_notify` rewritten: now sends BOTH WhatsApp + Email in parallel for every notify stage. Email includes branded HTML body + actual files attached (Tax Invoice, E-way Bill, LR Copy, PI). On `dispatched` stage, WhatsApp sends the template with Tax Invoice as document header, then a follow-up `send-media-message` carries the E-way Bill so customer receives BOTH attachments.
+- New endpoint `POST /api/orders/{oid}/invoice/generate` auto-creates a Tax Invoice PDF using `quote_pdf.py` with `doc_title="TAX INVOICE"`. New invoice numbering counter `HRE/INV/{FY}/{NNNN}`. Frontend exposes "Auto-generate Tax Invoice PDF" button at the `packaging` stage.
+- Strengthened stage-advance confirmation prompt: "Are you sure you want to move this order forward to '{stage}'? This will trigger automatic WhatsApp + Email notifications and cannot be undone."
+
 ## Dual-channel OTP (WhatsApp + Email) — implemented + hardened (2026-05-06)
 - New shared helpers `_send_otp_whatsapp` / `_send_otp_email` / `_otp_delivery_label`; both fire in parallel for the **same OTP code**
 - Email OTP uses Hostinger SMTP (multipart text + branded HTML, 60-min validity badge, gold accent)

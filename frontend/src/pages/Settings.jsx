@@ -129,6 +129,13 @@ function WhatsAppTab({ canEdit }) {
   }, {});
   const otpLangs = form.otp_template_name && tplLangsByName[form.otp_template_name] ? Array.from(tplLangsByName[form.otp_template_name]) : [];
   const quoteLangs = form.quote_template_name && tplLangsByName[form.quote_template_name] ? Array.from(tplLangsByName[form.quote_template_name]) : [];
+  // Per-stage langs (computed lazily from the loaded template list)
+  const piLangs = form.order_pi_template && tplLangsByName[form.order_pi_template] ? Array.from(tplLangsByName[form.order_pi_template]) : [];
+  const prodLangs = form.order_production_template && tplLangsByName[form.order_production_template] ? Array.from(tplLangsByName[form.order_production_template]) : [];
+  const pkgLangs = form.order_packaging_template && tplLangsByName[form.order_packaging_template] ? Array.from(tplLangsByName[form.order_packaging_template]) : [];
+  const dispLangs = form.order_dispatched_template && tplLangsByName[form.order_dispatched_template] ? Array.from(tplLangsByName[form.order_dispatched_template]) : [];
+  const lrLangs = form.order_lr_template && tplLangsByName[form.order_lr_template] ? Array.from(tplLangsByName[form.order_lr_template]) : [];
+  const poAdminLangs = form.po_received_admin_template && tplLangsByName[form.po_received_admin_template] ? Array.from(tplLangsByName[form.po_received_admin_template]) : [];
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -193,11 +200,35 @@ function WhatsAppTab({ canEdit }) {
               These templates fire automatically when an order moves through stages. Each template should accept body vars: <span className="font-mono">{`{{1}}`}</span>=customer, <span className="font-mono">{`{{2}}`}</span>=order#, <span className="font-mono">{`{{3}}`}</span>=stage, <span className="font-mono">{`{{4}}`}</span>=timestamp. Document header optional (auto-attached for PI / Dispatch / LR).
             </div>
           </div>
-          <TemplateField label="Proforma Issued Template" testId="wa-pi-template" value={form.order_pi_template} onChange={(v) => setForm({ ...form, order_pi_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
-          <TemplateField label="In Production Template" testId="wa-prod-template" value={form.order_production_template} onChange={(v) => setForm({ ...form, order_production_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
-          <TemplateField label="Packaging Template" testId="wa-packaging-template" value={form.order_packaging_template} onChange={(v) => setForm({ ...form, order_packaging_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
-          <TemplateField label="Dispatched Template" testId="wa-dispatched-template" value={form.order_dispatched_template} onChange={(v) => setForm({ ...form, order_dispatched_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
-          <TemplateField label="LR Received Template" testId="wa-lr-template" value={form.order_lr_template} onChange={(v) => setForm({ ...form, order_lr_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+          <TemplateField label="Proforma Issued Template" testId="wa-pi-template" value={form.order_pi_template} onChange={(v) => {
+            const langs = tplLangsByName[v] ? Array.from(tplLangsByName[v]) : [];
+            setForm({ ...form, order_pi_template: v, order_pi_template_language: langs[0] || form.order_pi_template_language || "en" });
+          }} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+          <TemplateField label="Proforma Template Language" testId="wa-pi-template-lang" value={form.order_pi_template_language || ""} onChange={(v) => setForm({ ...form, order_pi_template_language: v })} options={piLangs} disabled={!canEdit} placeholder="en or en_US" />
+
+          <TemplateField label="In Production Template" testId="wa-prod-template" value={form.order_production_template} onChange={(v) => {
+            const langs = tplLangsByName[v] ? Array.from(tplLangsByName[v]) : [];
+            setForm({ ...form, order_production_template: v, order_production_template_language: langs[0] || form.order_production_template_language || "en" });
+          }} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+          <TemplateField label="In Production Template Language" testId="wa-prod-template-lang" value={form.order_production_template_language || ""} onChange={(v) => setForm({ ...form, order_production_template_language: v })} options={prodLangs} disabled={!canEdit} placeholder="en or en_US" />
+
+          <TemplateField label="Packaging Template" testId="wa-packaging-template" value={form.order_packaging_template} onChange={(v) => {
+            const langs = tplLangsByName[v] ? Array.from(tplLangsByName[v]) : [];
+            setForm({ ...form, order_packaging_template: v, order_packaging_template_language: langs[0] || form.order_packaging_template_language || "en" });
+          }} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+          <TemplateField label="Packaging Template Language" testId="wa-packaging-template-lang" value={form.order_packaging_template_language || ""} onChange={(v) => setForm({ ...form, order_packaging_template_language: v })} options={pkgLangs} disabled={!canEdit} placeholder="en or en_US" />
+
+          <TemplateField label="Dispatched Template" testId="wa-dispatched-template" value={form.order_dispatched_template} onChange={(v) => {
+            const langs = tplLangsByName[v] ? Array.from(tplLangsByName[v]) : [];
+            setForm({ ...form, order_dispatched_template: v, order_dispatched_template_language: langs[0] || form.order_dispatched_template_language || "en" });
+          }} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+          <TemplateField label="Dispatched Template Language" testId="wa-dispatched-template-lang" value={form.order_dispatched_template_language || ""} onChange={(v) => setForm({ ...form, order_dispatched_template_language: v })} options={dispLangs} disabled={!canEdit} placeholder="en or en_US" />
+
+          <TemplateField label="LR Received Template" testId="wa-lr-template" value={form.order_lr_template} onChange={(v) => {
+            const langs = tplLangsByName[v] ? Array.from(tplLangsByName[v]) : [];
+            setForm({ ...form, order_lr_template: v, order_lr_template_language: langs[0] || form.order_lr_template_language || "en" });
+          }} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+          <TemplateField label="LR Received Template Language" testId="wa-lr-template-lang" value={form.order_lr_template_language || ""} onChange={(v) => setForm({ ...form, order_lr_template_language: v })} options={lrLangs} disabled={!canEdit} placeholder="en or en_US" />
 
           <div className="sm:col-span-2 border-t border-zinc-200 mt-2 pt-4">
             <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Internal Admin Alerts</div>
@@ -206,7 +237,11 @@ function WhatsAppTab({ canEdit }) {
             </div>
           </div>
           <Field label="Admin WhatsApp Phone" value={form.admin_notify_phone} onChange={(v) => setForm({ ...form, admin_notify_phone: v })} disabled={!canEdit} testId="wa-admin-notify-phone" placeholder="+91 98xxx xxxxx" />
-          <TemplateField label="PO Received Admin Template" testId="wa-po-admin-template" value={form.po_received_admin_template} onChange={(v) => setForm({ ...form, po_received_admin_template: v })} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+          <TemplateField label="PO Received Admin Template" testId="wa-po-admin-template" value={form.po_received_admin_template} onChange={(v) => {
+            const langs = tplLangsByName[v] ? Array.from(tplLangsByName[v]) : [];
+            setForm({ ...form, po_received_admin_template: v, po_received_admin_template_language: langs[0] || form.po_received_admin_template_language || "en" });
+          }} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
+          <TemplateField label="PO Admin Template Language" testId="wa-po-admin-template-lang" value={form.po_received_admin_template_language || ""} onChange={(v) => setForm({ ...form, po_received_admin_template_language: v })} options={poAdminLangs} disabled={!canEdit} placeholder="en or en_US" />
 
           <div className="sm:col-span-2 flex justify-end pt-2">
             <button type="submit" disabled={busy || !canEdit} data-testid="wa-save-btn" className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-5 py-3 flex items-center gap-2 disabled:opacity-60">

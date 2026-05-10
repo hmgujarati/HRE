@@ -33,11 +33,12 @@ export default function OrderView() {
   if (!order) return <div className="p-8 text-zinc-400">Loading…</div>;
 
   const advance = async (stage, note = "") => {
-    if (!window.confirm(`Move to "${STAGE_LABELS[stage]}"?`)) return;
+    const target = STAGE_LABELS[stage] || stage;
+    if (!window.confirm(`Are you sure you want to move this order forward to "${target}"?\n\nThis will trigger automatic WhatsApp + Email notifications to the customer (if configured) and cannot be undone.`)) return;
     setBusy(true);
     try {
       await api.post(`/orders/${id}/advance`, { stage, note });
-      toast.success(`Moved to ${STAGE_LABELS[stage]}`);
+      toast.success(`Moved to ${target}`);
       load();
     } catch (e) { toast.error(formatApiError(e?.response?.data?.detail)); }
     finally { setBusy(false); }
@@ -75,6 +76,17 @@ export default function OrderView() {
     finally { setBusy(false); }
   };
 
+  const generateInvoice = async () => {
+    if (!window.confirm("Generate a Tax Invoice PDF from this order's line items?\n\nIf an invoice already exists, it will be regenerated with the same number.")) return;
+    setBusy(true);
+    try {
+      await api.post(`/orders/${id}/invoice/generate`);
+      toast.success("Tax Invoice generated");
+      load();
+    } catch (e) { toast.error(formatApiError(e?.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+
   return (
     <div className="animate-fade-in">
       <div className="px-4 sm:px-8 py-4 border-b border-zinc-200 bg-zinc-50 flex items-center justify-between flex-wrap gap-2">
@@ -103,6 +115,7 @@ export default function OrderView() {
             onAdvance={advance}
             onRawMaterial={setRawMaterial}
             onGeneratePI={generatePI}
+            onGenerateInvoice={generateInvoice}
             onUploaded={load}
             busy={busy}
           />
@@ -252,7 +265,7 @@ function DocRow({ label, doc, number }) {
   );
 }
 
-function StageActions({ order, onAdvance, onRawMaterial, onGeneratePI, onUploaded, busy }) {
+function StageActions({ order, onAdvance, onRawMaterial, onGeneratePI, onGenerateInvoice, onUploaded, busy }) {
   const stage = order.stage;
   return (
     <div className="border border-zinc-200 bg-white p-5 space-y-4">
@@ -324,23 +337,30 @@ function StageActions({ order, onAdvance, onRawMaterial, onGeneratePI, onUploade
       )}
 
       {stage === "packaging" && (
-        <UploadAction
-          label="Mark Dispatched + Upload Invoice & E-way Bill"
-          orderId={order.id}
-          path="upload-dispatch"
-          extraFields={[
-            { name: "invoice_number", placeholder: "Tax Invoice #" },
-            { name: "eway_bill_number", placeholder: "E-way Bill #" },
-            { name: "transporter_name", placeholder: "Transporter name" },
-          ]}
-          fileFields={[
-            { name: "invoice", label: "Invoice PDF" },
-            { name: "eway_bill", label: "E-way Bill PDF" },
-          ]}
-          icon={Truck}
-          color="bg-cyan-600 hover:bg-cyan-700"
-          onDone={onUploaded}
-        />
+        <div className="space-y-3">
+          <button onClick={onGenerateInvoice} disabled={busy} data-testid="generate-invoice-btn" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold uppercase tracking-wider text-xs py-3 flex items-center justify-center gap-2 disabled:opacity-50">
+            <FileText size={14} weight="bold" /> Auto-generate Tax Invoice PDF
+          </button>
+          <div className="text-center text-[10px] uppercase tracking-wider text-zinc-400 font-bold">— then —</div>
+          <UploadAction
+            label="Mark Dispatched + Upload Invoice & E-way Bill"
+            orderId={order.id}
+            path="upload-dispatch"
+            extraFields={[
+              { name: "invoice_number", placeholder: "Tax Invoice #" },
+              { name: "eway_bill_number", placeholder: "E-way Bill #" },
+              { name: "transporter_name", placeholder: "Transporter name" },
+            ]}
+            fileFields={[
+              { name: "invoice", label: "Invoice PDF (skip if auto-generated above)" },
+              { name: "eway_bill", label: "E-way Bill PDF" },
+            ]}
+            icon={Truck}
+            color="bg-cyan-600 hover:bg-cyan-700"
+            onDone={onUploaded}
+          />
+          <div className="text-[10px] text-zinc-500 italic">Tip: click "Auto-generate Tax Invoice" first, then below you only need to attach the e-way bill.</div>
+        </div>
       )}
 
       {stage === "dispatched" && (
