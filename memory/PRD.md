@@ -287,6 +287,15 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Shared helpers `STAGE_ORDER`, `STAGE_TO_LABEL`, `mint_order_from_quote`, `next_order_number`, `next_pi_number`, `timeline_event`, `order_auto_notify`, `persist_order_notification`, `save_order_doc` consolidated into `services/dispatch.py`; legacy callers in `server.py` (`_bot_finalize_quote`, `public_submit_po`, `_public_order_summary`) updated via alias imports.
 - Regression testing (2026-05-10): new `test_orders_router_refactor.py` (19/19 pass), Phase 2B/2C dispatch+orders 28/29 (1 known seeded-state flake `test_advance_through_production_stages`), Phase 2A quotations 34/34, Phase 2D public-PO 18/18, WhatsApp bot flow 4/4, Phase 2E OTP 11/11. No new regressions.
 
+## WhatsApp Chatbot — Variant Disambiguation + Visual Aids (2026-05-10)
+- **Problem**: For a given product family, multiple variants can share the same cable mm² + hole mm but differ on physical letter-coded dimensions (e.g., RI-7018 vs RI-7020 vs RI-7116 — same cable 4-6 mm² + hole 8.2, but L1=14/18.5/22 and prices ₹5.30/₹7.44/₹10.37). Customers had no way to choose correctly.
+- **Fix 1 — Family images**: After picking a Product Family the bot now sends the family's `main_product_image` (lug photo) AND `dimension_drawing_image` (letter-labelled engineering drawing) via BizChat `send-media-message`, with a caption explaining the letter legend. Silently no-ops if images aren't uploaded or `PUBLIC_BASE_URL` is unset.
+- **Fix 2 — Comparison text before list**: When 2+ variants are returned by `_send_variant_matches`, a plain text message (≤4 kB, no WA limit) is sent first listing every variant's full set of dimensions in preferred order (L1, L, J, D, H, B, F, C, A, K). Customers cross-reference these against the dimension drawing.
+- **Fix 3 — Enriched list rows**: Each variant's 72-char `description` now shows ₹price + up to 3 *actually differing* dim keys (auto-picked via `_pick_distinguishing_keys`), so even without re-reading the comparison they get useful hints.
+- Code: `/app/backend/whatsapp_bot.py` — new helpers `send_image`, `_abs_url`, `_send_family_images`, `_DIM_KEY_ORDER`, `_ordered_dim_items`, `_pick_distinguishing_keys`, `_format_dim_row`, `_format_dim_full`, `_build_comparison_text`.
+- Tests: `test_dim_helpers_pick_distinguishing_keys_and_format` + `test_pick_family_sends_product_and_dimension_images` added to `tests/test_whatsapp_bot_flow.py`; all 6 WA bot tests pass; full regression 140/146 (6 pre-existing seed-data flakes, no new ones).
+
+
 ## Backlog (post-refactor)
 - P1: Hot Leads dashboard widget (quotes Read but not acted on)
 - P2: Customer PO acknowledgement (auto WA/Email reply when customer uploads a PO)

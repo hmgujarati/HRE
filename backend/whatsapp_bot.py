@@ -17,6 +17,7 @@ Persists state to MongoDB collection `chatbot_sessions`:
 
 from __future__ import annotations
 import logging
+import os
 import re
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,6 +28,21 @@ logger = logging.getLogger(__name__)
 
 SESSION_TTL_MINUTES = 30
 ABOUT_HRE_URL = "https://hrexporter.com/about-hr-exporter/"
+PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL") or "").rstrip("/")
+
+
+def _abs_url(rel_or_abs: Optional[str]) -> Optional[str]:
+    """Return a publicly reachable URL for a stored image path.
+    Stored paths like '/api/uploads/foo.png' get prefixed with PUBLIC_BASE_URL.
+    Absolute http(s) URLs are returned unchanged. Returns None if input falsy
+    or if PUBLIC_BASE_URL is unset (BizChat can't fetch relative paths)."""
+    if not rel_or_abs:
+        return None
+    if rel_or_abs.startswith(("http://", "https://")):
+        return rel_or_abs
+    if not PUBLIC_BASE_URL:
+        return None
+    return f"{PUBLIC_BASE_URL}{rel_or_abs if rel_or_abs.startswith('/') else '/' + rel_or_abs}"
 
 # State machine values
 ST_WELCOME = "welcome"
@@ -175,6 +191,19 @@ async def send_list(wa: dict, phone: str, body_text: str, button_text: str,
     if footer_text:
         payload["footer_text"] = footer_text[:60]
     return await _bizchat_post(wa, "send-interactive-message", payload)
+
+
+async def send_image(wa: dict, phone: str, image_url: str, caption: Optional[str] = None) -> dict:
+    """Send an image via BizChat send-media-message (media_type='image').
+    `image_url` MUST be publicly reachable (BizChat fetches it server-side)."""
+    payload: Dict[str, Any] = {
+        "phone_number": phone,
+        "media_type": "image",
+        "media_url": image_url,
+    }
+    if caption:
+        payload["caption"] = caption[:1024]
+    return await _bizchat_post(wa, "send-media-message", payload)
 
 
 async def _safe_send(coro, phone: str, label: str) -> bool:
@@ -404,6 +433,34 @@ async def _send_material_buttons(wa: dict, db, phone: str):
     return True, mats[:3]
 
 
+async def _send_family_images(wa: dict, db, phone: str, family_id: str, family_name: str) -> None:
+    """After picking a family, send (a) the lug photo and (b) the dimension drawing.
+    Silently no-ops if PUBLIC_BASE_URL isn't set or images aren't uploaded."""
+    fam = await db.product_families.find_one(
+        {"id": family_id},
+        {"_id": 0, "main_product_image": 1, "dimension_drawing_image": 1},
+    ) or {}
+    product_img = _abs_url(fam.get("main_product_image"))
+    dim_img = _abs_url(fam.get("dimension_drawing_image"))
+    if product_img:
+        await _safe_send(
+            send_image(wa, phone, product_img, caption=f"*{family_name}* — product photo"),
+            phone, "family_product_image",
+        )
+    if dim_img:
+        await _safe_send(
+            send_image(
+                wa, phone, dim_img,
+                caption=(
+                    "📐 *Dimension Reference*\n"
+                    "Letters (A, B, C, D, F, H, J, K, L1…) on the drawing match "
+                    "the values you'll see for each variant — use this to compare."
+                ),
+            ),
+            phone, "family_dim_drawing",
+        )
+
+
 async def _send_family_list(wa: dict, db, phone: str, material_id: str):
     families = await db.product_families.find(
         {"active": True, "material_id": material_id},
@@ -429,13 +486,116 @@ async def _send_family_list(wa: dict, db, phone: str, material_id: str):
     return True
 
 
+# Preferred dimension key order for compact row descriptions and comparison text.
+# Letters match the HRE dimension drawing; we surface length/diameter/height first
+# because those are the most physically meaningful distinguishers between two
+# variants that share cable mm² + hole mm.
+_DIM_KEY_ORDER = ("L1", "L", "J", "D", "H", "B", "F", "C", "A", "K")
+
+
+def _dim_val(d: Dict[str, Any], k: str) -> str:
+    v = d.get(k)
+    if v is None or v == "":
+        return ""
+    return str(v).strip()
+
+
+def _ordered_dim_items(dims: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """Return [(key, value), ...] for non-empty dim fields, prioritising the
+    preferred order above; unknown keys are appended alphabetically at the end."""
+    if not isinstance(dims, dict):
+        return []
+    seen = set()
+    out: List[Tuple[str, str]] = []
+    for k in _DIM_KEY_ORDER:
+        val = _dim_val(dims, k)
+        if val:
+            out.append((k, val))
+            seen.add(k)
+    for k in sorted(dims.keys()):
+        if k in seen:
+            continue
+        val = _dim_val(dims, k)
+        if val:
+            out.append((k, val))
+    return out
+
+
+def _pick_distinguishing_keys(variants: List[dict], max_keys: int = 3) -> List[str]:
+    """Pick up to `max_keys` dim keys whose VALUES differ across the given variants
+    (preferring keys earlier in _DIM_KEY_ORDER). If everything matches (or only
+    one variant), fall back to the first few keys in preferred order."""
+    if not variants:
+        return []
+    dim_dicts = [v.get("dimensions") or {} for v in variants]
+    # All keys appearing in any variant
+    all_keys: List[str] = []
+    for k in _DIM_KEY_ORDER:
+        if any(_dim_val(d, k) for d in dim_dicts):
+            all_keys.append(k)
+    differing: List[str] = []
+    for k in all_keys:
+        vals = {_dim_val(d, k) for d in dim_dicts}
+        vals.discard("")
+        if len(vals) > 1:
+            differing.append(k)
+        if len(differing) >= max_keys:
+            return differing
+    # Pad with non-differing-but-present preferred keys so the row still shows some context
+    for k in all_keys:
+        if k not in differing:
+            differing.append(k)
+        if len(differing) >= max_keys:
+            break
+    return differing[:max_keys]
+
+
+def _format_dim_row(dims: Dict[str, Any], keys: List[str]) -> str:
+    parts = []
+    for k in keys:
+        val = _dim_val(dims, k)
+        if val:
+            parts.append(f"{k}={val}")
+    return " · ".join(parts)
+
+
+def _format_dim_full(dims: Dict[str, Any]) -> str:
+    items = _ordered_dim_items(dims)
+    return " · ".join(f"{k}={v}" for k, v in items)
+
+
+_RANK_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+
+def _build_comparison_text(top: List[dict], cable_target: float,
+                            hole_target: Optional[float]) -> str:
+    header = f"*{len(top)} match{'es' if len(top) > 1 else ''} for cable={cable_target}"
+    if hole_target is not None:
+        header += f", hole={hole_target}"
+    header += "* — compare dimensions:"
+    blocks = [header]
+    for i, v in enumerate(top):
+        emoji = _RANK_EMOJI[i] if i < len(_RANK_EMOJI) else f"{i+1}."
+        code = (v.get("product_code") or v.get("product_name") or "Variant").strip()
+        price = float(v.get("final_price") or 0)
+        line_a = f"\n{emoji} *{code}* — ₹{price:,.2f}/unit" if price > 0 else f"\n{emoji} *{code}*"
+        dim_str = _format_dim_full(v.get("dimensions") or {})
+        line_b = f"\n    {dim_str}" if dim_str else ""
+        blocks.append(line_a + line_b)
+    blocks.append("\n\n📐 Refer to the *dimension drawing* sent earlier to map each letter (A, B, C…) to the physical feature.")
+    return "".join(blocks)[:4000]  # WA text-message safety margin
+
+
 async def _send_variant_matches(wa: dict, db, phone: str, family_id: str,
                                  cable_target: float, hole_target: Optional[float]):
-    """Fetch all active variants in family, score by numeric distance, send top 5 as a list."""
+    """Fetch all active variants in family, score by numeric distance, send top 5
+    as a list. When 2+ variants tie/are close on cable+hole, an extra TEXT message
+    with the full dimension comparison is sent first so the customer can pick the
+    right one against the dimension drawing."""
     variants = await db.product_variants.find(
         {"product_family_id": family_id, "active": True},
         {"_id": 0, "id": 1, "product_code": 1, "product_name": 1, "final_price": 1,
-         "cable_size": 1, "hole_size": 1, "size": 1},
+         "cable_size": 1, "hole_size": 1, "size": 1, "dimensions": 1},
     ).to_list(2000)
     if not variants:
         await _safe_send(send_text(wa, phone, "No variants available for this family. Type 'menu' to start over."),
@@ -451,24 +611,36 @@ async def _send_variant_matches(wa: dict, db, phone: str, family_id: str,
         scored.append((sc, v))
     scored.sort(key=lambda t: t[0])
     top = [v for _, v in scored[:5]]
+
+    # Send the full-dimension comparison BEFORE the list when there are 2+ matches.
+    if len(top) >= 2:
+        await _safe_send(
+            send_text(wa, phone, _build_comparison_text(top, cable_target, hole_target)),
+            phone, "variant_comparison",
+        )
+
+    # Pick the dim keys that actually differ across the top set so each list
+    # row's tight 72-char description carries useful disambiguation.
+    dim_keys = _pick_distinguishing_keys(top, max_keys=3)
+
     rows = []
     for v in top:
         title = (v.get("product_code") or v.get("product_name") or "Variant").strip()
         price = float(v.get("final_price") or 0)
-        cs = (v.get("cable_size") or "").strip()
-        hs = (v.get("hole_size") or "").strip()
-        bits = [b for b in [cs, (f"⌀{hs}" if hs else "")] if b]
-        size_label = " · ".join(bits)
+        dim_str = _format_dim_row(v.get("dimensions") or {}, dim_keys)
         if price > 0:
-            desc = (f"₹{price:,.2f}/unit" + (f" · {size_label}" if size_label else "")).strip()
+            desc = f"₹{price:,.2f}" + (f" · {dim_str}" if dim_str else "")
         else:
-            desc = size_label or "Tap to select"
+            desc = dim_str or "Tap to select"
         rows.append({"id": f"var:{v['id']}", "title": title[:24], "description": desc[:72]})
+    body = (
+        f"Top {len(top)} closest matches for cable={cable_target}"
+        + (f", hole={hole_target}" if hole_target is not None else "")
+        + ". Pick one:"
+    )
     await _safe_send(send_list(
         wa, phone,
-        body_text=f"Top {len(top)} closest matches for cable={cable_target}"
-                  + (f", hole={hole_target}" if hole_target is not None else "")
-                  + ". Pick one:",
+        body_text=body,
         button_text="Pick Variant",
         sections=[{"title": "Closest matches", "id": "matches", "rows": rows}],
         header_text="Step 3 of 3",
@@ -680,6 +852,10 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
                 return {"state": ST_PICK_FAMILY, "customer_phone": phone, "actions_taken": ["family_not_found"]}
             ctx["current_family_id"] = family_id
             ctx["current_family_name"] = fam.get("family_name") or "Family"
+            # Send the lug product photo + dimension drawing so the customer has
+            # a visual reference for the letter-coded dimensions they'll see in
+            # the variant list (no-op if the family hasn't uploaded those images).
+            await _send_family_images(wa, db, phone, family_id, ctx["current_family_name"])
             await _safe_send(send_text(wa, phone,
                             f"Great — *{fam['family_name']}*.\n\nWhat *cable size* do you need? Reply with a *number only* (e.g. 4, 6, 1.5, 16)."),
                              phone, "ask_cable")

@@ -206,3 +206,92 @@ def test_full_flow_to_proforma():
         await _cleanup(db, PHONE, PHONE_NORM)
 
     _run(go())
+
+
+def test_dim_helpers_pick_distinguishing_keys_and_format():
+    """Verify the dimension-formatting helpers used to disambiguate variants
+    that share cable+hole but differ on physical dims (the user-reported bug)."""
+    importlib.reload(wb)
+    variants = [
+        {"product_code": "RI-7018", "final_price": 5.30,
+         "dimensions": {"A": "3.5", "C": "5.5", "D": "12", "F": "1", "B": "6", "K": "2", "H": "6", "L1": "14", "J": "20"}},
+        {"product_code": "RI-7020", "final_price": 7.44,
+         "dimensions": {"A": "3.5", "C": "5.5", "D": "14", "F": "1", "B": "6", "K": "2", "H": "10.5", "L1": "18.5", "J": "25.5"}},
+        {"product_code": "RI-7116", "final_price": 10.37,
+         "dimensions": {"A": "3.5", "C": "5.5", "D": "16", "F": "1", "B": "6", "K": "3", "H": "13", "L1": "22", "J": "30"}},
+    ]
+    # A, C, F, B are equal across these three; L1, D, H, J, K differ.
+    keys = wb._pick_distinguishing_keys(variants, max_keys=3)
+    # All keys must come from the set of dims that ACTUALLY differ across the variants
+    differing = {"L1", "D", "H", "J", "K"}
+    assert keys, "expected non-empty distinguishing key list"
+    assert all(k in differing for k in keys), f"got non-differing keys: {keys}"
+    # L1 and D must be present (top-priority distinguishers)
+    assert "L1" in keys and "D" in keys, keys
+    desc = "Rs{:,.2f} . {}".format(variants[0]["final_price"], wb._format_dim_row(variants[0]["dimensions"], keys))
+    assert len(desc) <= 72, desc
+    assert "L1=14" in desc and "D=12" in desc
+    txt = wb._build_comparison_text(variants, cable_target=6.0, hole_target=8.0)
+    assert "RI-7018" in txt and "RI-7020" in txt and "RI-7116" in txt
+    assert "L1=14" in txt and "L1=18.5" in txt
+    assert "dimension drawing" in txt.lower()
+
+
+def test_pick_family_sends_product_and_dimension_images():
+    """When a customer picks a product family, the bot pushes two images
+    (main_product_image + dimension_drawing_image) before asking for cable size."""
+    importlib.reload(wb)
+    db = _db()
+    captured = []
+
+    async def fake_post(_wa, path, payload):
+        captured.append((path, payload))
+        return {"data": {"wamid": f"fake-{len(captured)}"}}
+
+    async def go():
+        wb.PUBLIC_BASE_URL = wb.PUBLIC_BASE_URL or "https://test.local"
+        fam_id = "test-fam-images-1234"
+        await db.product_families.delete_many({"id": fam_id})
+        await db.product_families.insert_one({
+            "id": fam_id, "active": True, "family_name": "Test Lug",
+            "material_id": "test-mat-images", "category_id": "cat-x",
+            "main_product_image": "/api/uploads/test_main.png",
+            "dimension_drawing_image": "/api/uploads/test_dim.png",
+        })
+        phone = "+919000111222"
+        phone_norm = "919000111222"
+        await db.chatbot_sessions.delete_many({"phone_norm": phone_norm})
+        await db.chatbot_sessions.update_one(
+            {"phone_norm": phone_norm},
+            {"$set": {"phone_norm": phone_norm, "state": wb.ST_PICK_FAMILY,
+                      "ctx": {"customer": {"name": "T", "email": "t@t.com",
+                                            "company": "T", "phone": phone},
+                              "line_items": [], "current_material_id": "test-mat-images",
+                              "current_material_name": "Copper"},
+                      "last_msg_at": wb._now_dt().isoformat()}},
+            upsert=True,
+        )
+
+        with patch.object(wb, "_bizchat_post", new=fake_post):
+            r = await wb.dispatch(
+                db=db, wa=WA, sm={}, settings_doc={},
+                msg={"phone": phone, "phone_norm": phone_norm,
+                     "text": "Test Lug", "selection_id": f"fam:{fam_id}",
+                     "wamid": "in-img-test"},
+                builder_fn=None,
+            )
+
+        assert r["state"] == "ask_cable", r
+        media_calls = [p for path, p in captured
+                       if path == "send-media-message" and p.get("media_type") == "image"]
+        assert len(media_calls) == 2, captured
+        urls = [m["media_url"] for m in media_calls]
+        assert any("test_main.png" in u for u in urls), urls
+        assert any("test_dim.png" in u for u in urls), urls
+        dim_msg = next(m for m in media_calls if "test_dim.png" in m["media_url"])
+        assert "Dimension Reference" in dim_msg["caption"]
+
+        await db.product_families.delete_one({"id": fam_id})
+        await db.chatbot_sessions.delete_one({"phone_norm": phone_norm})
+
+    _run(go())
