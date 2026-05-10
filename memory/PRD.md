@@ -116,7 +116,27 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
-## WhatsApp Inbound Bot v1 (2026-05-10)
+## WhatsApp Chatbot v2 — Material → Family → Cable → Hole → Qty → Proforma (2026-05-10)
+- **Bug fix**: Bot was using wrong field names (`name`/`code`/`price`/`family_id`) — schema is `family_name`/`product_code`/`final_price`/`product_family_id`. On the customer's WhatsApp, family lists rendered as "Family / Tap to select" (empty fallback) and variants as "Variant / ₹0/unit". Fixed by aligning schema reads in `_send_family_list`, `_send_variant_*` and `_bot_finalize_quote`.
+- **Flow rewrite** per user request:
+  1. WELCOME → main menu buttons
+  2. Returning customer skips name/email/company; new customers complete it
+  3. **PICK_MATERIAL** — dynamic buttons from `materials.material_name` (Copper / Aluminium)
+  4. **PICK_FAMILY** — list filtered by `material_id`, shows `short_name||family_name` + `product_type||family_name`
+  5. **ASK_CABLE** — strict numeric guard: rejects non-numeric input
+  6. **ASK_HOLE** — numeric or `skip`/`no`/`none`/`-`/etc.
+  7. **PICK_VARIANT** — Top 5 closest matches via numeric range distance (re-uses the public smart-match algorithm; lives in `whatsapp_bot.parse_size_range` + `range_distance`)
+  8. **ASK_QTY** — numeric guard + MOQ check; sends a friendly "minimum X units" message when below MOQ
+  9. **AFTER_ITEM** — buttons: Add another / Review cart / Cancel. *Add another loops back to PICK_MATERIAL* (per user choice 1b)
+  10. **REVIEW_CART** — full itemised summary with totals; buttons: Confirm & Send / Cancel
+  11. **CONFIRM** → calls `_bot_finalize_quote` which: builds Quotation (status=sent) → mints Order (stage=pending_po → proforma_issued) → generates **Proforma Invoice PDF** (`HRE/PI/{FY}/{NNNN}`) → fires `_order_auto_notify("proforma_issued")` so customer receives the PI on WhatsApp + Email
+- New states: `pick_material`, `pick_family`, `ask_cable`, `ask_hole`, `after_item`, `review_cart`. Old `browse_family`/`add_more` are retired.
+- Material choices are persisted in `ctx.material_choices` so button reply id "1"/"2" can be resolved back to the chosen material id (BizChat returns the index, not the title).
+- Numeric input validation: `parse_first_number(text)` extracts the first number; reject if `None` or `<= 0`. Hole-size accepts `skip`-like words.
+- `_bot_finalize_quote` now produces the proper-shape `QuoteIn` line items (`product_variant_id`, `product_code`, `family_name`, `cable_size`, `hole_size`, `hsn_code`, `quantity`, `base_price`, `gst_percentage`) so `_compute_quote_totals` and the WeasyPrint PDF render correctly with full GST math.
+- Tests: `tests/test_whatsapp_bot_flow.py` — 3 tests passing (size parser, handoff keyword, full e2e flow with quote+order+proforma). Locks down the schema-name regression so future schema drift fails loud.
+
+
 - New module `/app/backend/whatsapp_bot.py` with state machine + outbound send helpers (text / button / list)
 - Endpoint `POST /api/webhooks/bizchat/inbound` receives BizChat customer-message webhook payloads
 - Permissive parser handles standard Meta shapes (text, button_reply, list_reply) — every raw payload logged to `webhook_events` collection for debugging

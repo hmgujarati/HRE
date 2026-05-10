@@ -2250,16 +2250,16 @@ from whatsapp_bot import dispatch as bot_dispatch, parse_inbound as bot_parse_in
 
 
 async def _bot_finalize_quote(*, line_items: List[Dict[str, Any]], customer: Dict[str, Any], source: str) -> dict:
-    """Build + persist a finalized Quotation from bot-collected line items.
-    Returns the saved quote dict. Reuses existing dispatch infra so the customer
-    receives PDF on WhatsApp + Email exactly like the website flow."""
+    """Build a finalized Quotation from bot-collected line items, auto-convert to
+    an Order, generate the Proforma Invoice PDF, and dispatch it via WA + Email.
+    Returns: {quote_id, quote_number, order_id, order_number, proforma{number, url},
+              grand_total, contact_email, contact_phone}."""
     if not line_items:
         raise HTTPException(status_code=400, detail="No items to quote")
     phone = customer.get("phone") or ""
     phone_norm = "".join(ch for ch in phone if ch.isdigit())
     contact = await db.contacts.find_one({"phone_norm": phone_norm}, {"_id": 0})
     if not contact:
-        # Create contact (was already done in bot for new users; safety net)
         contact = {
             "id": str(uuid.uuid4()),
             "name": customer.get("name") or "Bot Customer",
@@ -2270,72 +2270,140 @@ async def _bot_finalize_quote(*, line_items: List[Dict[str, Any]], customer: Dic
             "created_at": now_iso(),
             "source": "whatsapp_bot",
         }
-        await db.contacts.insert_one(contact)
+        await db.contacts.insert_one(contact.copy())
 
-    # Hydrate line items: variant lookup → enriched quote line
+    # Hydrate to the proper QuoteIn line schema so _compute_quote_totals + PDF render work.
     enriched_lines: List[Dict[str, Any]] = []
     for li in line_items:
         v = await db.product_variants.find_one({"id": li["variant_id"]}, {"_id": 0})
         if not v:
             continue
+        fam = await db.product_families.find_one({"id": v.get("product_family_id")}, {"_id": 0, "family_name": 1}) if v.get("product_family_id") else None
         unit_price = float(li.get("unit_price") or v.get("final_price") or 0)
-        qty = int(li.get("qty") or 1)
-        line_total = unit_price * qty
+        qty = float(li.get("qty") or 1)
         enriched_lines.append({
-            "id": str(uuid.uuid4()),
-            "variant_id": v["id"],
-            "variant_code": v.get("product_code") or "",
-            "variant_name": v.get("product_name") or "",
-            "family_id": v.get("product_family_id"),
-            "family_name": (await db.product_families.find_one({"id": v.get("product_family_id")}, {"_id": 0, "family_name": 1}) or {}).get("family_name", ""),
-            "qty": qty,
-            "unit_price": unit_price,
-            "discount_pct": 0,
-            "tax_pct": 18,
-            "line_total": line_total,
+            "product_variant_id": v["id"],
+            "product_code": v.get("product_code") or "",
+            "family_name": (fam or {}).get("family_name", ""),
+            "description": v.get("product_name") or "",
+            "cable_size": v.get("cable_size") or "",
+            "hole_size": v.get("hole_size") or "",
+            "dimensions": v.get("dimensions") or {},
+            "hsn_code": v.get("hsn_code") or "85369090",
+            "quantity": qty,
+            "unit": v.get("unit") or "NOS",
+            "base_price": unit_price,
+            "discount_percentage": 0.0,
+            "gst_percentage": float(v.get("gst_percentage") or 18.0),
         })
-    grand_total = sum(li["line_total"] for li in enriched_lines)
+    if not enriched_lines:
+        raise HTTPException(status_code=400, detail="No valid variants found in bot cart")
+    totals = _compute_quote_totals(enriched_lines)
     qno = await _next_quote_number()
     quote = {
         "id": str(uuid.uuid4()),
         "quote_number": qno,
+        "version": 1,
+        "parent_quote_id": None,
+        "status": "sent",
         "contact_id": contact["id"],
-        "contact_name": contact.get("name"),
-        "contact_company": contact.get("company"),
-        "contact_email": contact.get("email"),
-        "contact_phone": contact.get("phone"),
-        "contact_billing_address": contact.get("billing_address") or "",
-        "contact_shipping_address": contact.get("shipping_address") or "",
-        "line_items": enriched_lines,
-        "subtotal": grand_total,
-        "discount_total": 0,
-        "tax_total": 0,
-        "grand_total": grand_total,
-        "status": "draft",
+        "contact_name": contact.get("name", ""),
+        "contact_company": contact.get("company", ""),
+        "contact_email": contact.get("email", ""),
+        "contact_phone": contact.get("phone", ""),
+        "contact_gst": contact.get("gst_number", ""),
+        "billing_address": contact.get("billing_address", ""),
+        "shipping_address": contact.get("shipping_address", ""),
+        "place_of_supply": contact.get("state", ""),
+        "currency": "INR",
         "valid_until": (datetime.now(timezone.utc) + timedelta(days=15)).date().isoformat(),
         "notes": f"Auto-generated via WhatsApp bot on {datetime.now().strftime('%d-%m-%Y %H:%M')}",
-        "terms": "Prices are exclusive of freight unless specified.\nValidity: 15 days.\n50% advance with PO.",
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
+        "terms": "PAYMENT: 50% advance, 50% before dispatch.\nDelivery: 15-20 working days post advance.\nPrices are ex-works unless specified.",
+        "line_items": enriched_lines,
+        **totals,
         "created_by": "whatsapp_bot",
         "source": source,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "sent_at": now_iso(),
+        "approved_at": None,
+        "rejected_at": None,
         "dispatch_log": [],
     }
-    await db.quotations.insert_one(quote)
-    # Trigger the same dispatch pipeline (PDF + WA + Email)
+    await db.quotations.insert_one(quote.copy())
+
+    # Mint an Order from the quote (pending_po) and immediately move to proforma_issued.
+    order = _mint_order_from_quote(quote, "whatsapp_bot", po_number="")
+    order["order_number"] = await _next_order_number()
+    order["timeline"] = [
+        _timeline_event("created", "Order auto-created from WhatsApp bot quote",
+                        "whatsapp_bot", quote_number=qno),
+    ]
+    await db.orders.insert_one(order.copy())
+
+    # Generate the Proforma Invoice PDF (mirrors /api/orders/{oid}/proforma/generate).
+    from quote_pdf import render_quote_pdf
+    pi_no = await _next_pi_number()
+    out_dir = UPLOAD_DIR / "orders" / order["id"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", pi_no)
+    ts = _now_dt().strftime("%Y%m%d%H%M%S")
+    out = out_dir / f"proforma_{safe}_{ts}.pdf"
+    doc_src = {
+        **order,
+        "quote_number": pi_no,
+        "created_at": now_iso(),
+        "valid_until": (_now_dt() + timedelta(days=15)).date().isoformat(),
+        "notes": order.get("notes") or "",
+        "terms": "PAYMENT: 50% advance, 50% before dispatch.\nDelivery: 15-20 working days post advance.\nPrices are ex-works unless specified.",
+    }
+    logo = UPLOAD_DIR.parent.parent / "frontend" / "public" / "hre-logo-light-bg.png"
+    logo_url = logo.as_uri() if logo.exists() else None
+    loop = asyncio.get_event_loop()
     try:
-        delivery = await _dispatch_finalised_quote(quote)
-        if delivery.get("pdf") or delivery.get("whatsapp") or delivery.get("email"):
-            await db.quotations.update_one(
-                {"id": quote["id"]},
-                {"$set": {"sent_at": now_iso(), "status": "sent"}},
-            )
-            quote["status"] = "sent"
+        await loop.run_in_executor(None, lambda: render_quote_pdf(doc_src, out, logo_url, "PROFORMA INVOICE"))
+        public_url = f"{PUBLIC_BASE_URL}/api/uploads/orders/{order['id']}/{out.name}" if PUBLIC_BASE_URL else f"/api/uploads/orders/{order['id']}/{out.name}"
+        proforma = {
+            "number": pi_no,
+            "filename": out.name,
+            "url": public_url,
+            "generated_at": now_iso(),
+            "generated_by": "whatsapp_bot",
+            "source": "generated",
+        }
+        ev = _timeline_event("proforma", f"Proforma Invoice {pi_no} generated", "whatsapp_bot")
+        await db.orders.update_one(
+            {"id": order["id"]},
+            {"$set": {"proforma": proforma, "stage": "proforma_issued", "updated_at": now_iso()},
+             "$push": {"timeline": ev}},
+        )
     except Exception:
-        logger.exception(f"[bot-finalize] dispatch failed for {qno}")
-    # Re-fetch fresh
-    fresh = await db.quotations.find_one({"id": quote["id"]}, {"_id": 0})
-    return fresh or quote
+        logger.exception(f"[bot-finalize] proforma PDF generation failed for {pi_no}")
+        # We continue — at least quote + order exist; admin can regenerate.
+
+    # Send the Proforma to the customer via WhatsApp + Email (auto-notify).
+    updated = await db.orders.find_one({"id": order["id"]}, {"_id": 0})
+    if updated and updated.get("stage") == "proforma_issued":
+        try:
+            notify = await _order_auto_notify(updated, "proforma_issued")
+            if notify:
+                notify["stage"] = "proforma_issued"
+                notify["at"] = now_iso()
+                await _persist_order_notification(order["id"], notify)
+        except Exception:
+            logger.exception(f"[bot-finalize] proforma auto-notify failed for {pi_no}")
+
+    fresh = await db.orders.find_one({"id": order["id"]}, {"_id": 0}) or order
+    return {
+        "quote_id": quote["id"],
+        "quote_number": qno,
+        "order_id": order["id"],
+        "order_number": order["order_number"],
+        "proforma": fresh.get("proforma") or {"number": pi_no},
+        "grand_total": float(quote.get("grand_total") or 0),
+        "contact_email": contact.get("email"),
+        "contact_phone": contact.get("phone"),
+    }
 
 
 @api.post("/webhooks/bizchat/inbound")
