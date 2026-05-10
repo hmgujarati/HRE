@@ -2633,6 +2633,7 @@ def _public_order_summary(order: dict) -> dict:
         "po_submitted_at": (docs.get("po") or {}).get("uploaded_at") if (docs.get("po") or {}).get("submitted_by_customer") else None,
         "po_url": (docs.get("po") or {}).get("url") or "",
         "po_instructions": (docs.get("po") or {}).get("customer_instructions") or "",
+        "expected_completion_date": order.get("expected_completion_date") or "",
         "updated_at": order.get("updated_at"),
     }
 
@@ -3050,6 +3051,17 @@ async def _order_auto_notify(order: dict, stage: str):
     ord_no = order.get("order_number") or ""
     stage_label = STAGE_TO_LABEL.get(stage, stage)  # Used in email/audit copy
     stage_template_label = STAGE_TEMPLATE_LABEL.get(stage, stage_label)  # Used in WA/email field_3
+    # Build the timestamp string — append expected completion date if admin has set one,
+    # so it flows into the EXISTING approved templates' {{4}} variable without re-approval.
+    timestamp = datetime.now().strftime("%d-%m-%Y %H:%M")
+    eta = (order.get("expected_completion_date") or "").strip()
+    eta_pretty = ""
+    if eta:
+        try:
+            eta_pretty = datetime.strptime(eta, "%Y-%m-%d").strftime("%d-%b-%Y")
+        except Exception:
+            eta_pretty = eta
+    field_4_value = f"{timestamp}  ·  Expected completion: {eta_pretty}" if eta_pretty else timestamp
     docs = order.get("documents") or {}
 
     # Build the list of attachments for THIS stage
@@ -3103,7 +3115,7 @@ async def _order_auto_notify(order: dict, stage: str):
             extra: Dict[str, Any] = {
                 "field_2": ord_no,
                 "field_3": stage_template_label,
-                "field_4": datetime.now().strftime("%d-%m-%Y %H:%M"),
+                "field_4": field_4_value,
             }
             if primary:
                 extra["header_document"] = primary["url"]
@@ -3147,10 +3159,15 @@ async def _order_auto_notify(order: dict, stage: str):
             if attachments:
                 items = "".join(f"<li>{a['label']} — <span style='color:#71717a'>{a['filename']}</span></li>" for a in attachments)
                 attach_list_html = f"<p style='margin:18px 0 4px;color:#1A1A1A;font-weight:bold;font-size:13px;'>Attached:</p><ul style='margin:0;padding-left:18px;color:#3f3f46;font-size:13px;line-height:1.7;'>{items}</ul>"
+            eta_block_html = ""
+            if eta_pretty:
+                eta_block_html = f"<div style='margin-top:10px;background:#1A1A1A;color:#FBAE17;padding:10px 14px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;letter-spacing:0.5px;'>EXPECTED COMPLETION · {eta_pretty}</div>"
             body_text = (
                 f"Hello {customer},\n\n"
                 f"Your order {ord_no} has moved to: {stage_label}.\n"
-                f"Updated: {datetime.now().strftime('%d-%m-%Y %H:%M')}\n\n"
+                f"Updated: {timestamp}\n"
+                + (f"Expected completion: {eta_pretty}\n" if eta_pretty else "")
+                + "\n"
                 + ("Documents attached:\n" + "\n".join(f"  - {a['label']}" for a in attachments) + "\n\n" if attachments else "")
                 + "Track your order live in our customer portal.\n\nTeam HRExporter\nAn ISO 9001:2015 Certified Company"
             )
@@ -3162,7 +3179,8 @@ async def _order_auto_notify(order: dict, stage: str):
 <p style="margin:0 0 6px;color:#71717a;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;font-weight:bold;">Order {ord_no}</p>
 <h2 style="margin:0 0 16px;color:#1A1A1A;font-size:22px;font-weight:900;">{stage_label}</h2>
 <p style="margin:0 0 18px;color:#3f3f46;font-size:14px;line-height:1.6;">Hello {customer},<br/>Your order has moved to <b>{stage_label}</b>.</p>
-<div style="background:#FBAE17;color:#1A1A1A;padding:10px 14px;font-family:'Courier New',monospace;font-size:12px;font-weight:bold;">UPDATED · {datetime.now().strftime('%d-%m-%Y %H:%M')}</div>
+<div style="background:#FBAE17;color:#1A1A1A;padding:10px 14px;font-family:'Courier New',monospace;font-size:12px;font-weight:bold;">UPDATED · {timestamp}</div>
+{eta_block_html}
 {attach_list_html}
 </td></tr>
 <tr><td style="background:#fafafa;color:#a1a1aa;padding:14px 24px;font-size:11px;text-align:center;border-top:1px solid #e4e4e7;">An ISO 9001:2015 Certified Company &middot; info@hrexporter.com</td></tr>
@@ -3288,6 +3306,29 @@ class OrderAdvanceIn(BaseModel):
     note: Optional[str] = ""
 
 
+# Doc requirements per stage — used to gate generic /advance and surface
+# missing-doc errors with a friendly message
+STAGE_REQUIRED_DOCS: Dict[str, List[tuple]] = {
+    "proforma_issued": [("proforma", "Proforma Invoice")],
+    "dispatched": [("documents.invoice", "Tax Invoice"), ("documents.eway_bill", "E-way Bill")],
+    "lr_received": [("documents.lr", "LR Copy")],
+}
+
+
+def _missing_required_docs(order: dict, stage: str) -> List[str]:
+    """Return human-readable labels of missing required docs for the given stage."""
+    needed = STAGE_REQUIRED_DOCS.get(stage) or []
+    missing: List[str] = []
+    for path, label in needed:
+        parts = path.split(".")
+        node: Any = order
+        for p in parts:
+            node = (node or {}).get(p) if isinstance(node, dict) else None
+        if not (node and isinstance(node, dict) and node.get("filename")):
+            missing.append(label)
+    return missing
+
+
 @api.post("/orders/{oid}/advance")
 async def advance_order_stage(oid: str, data: OrderAdvanceIn, user: dict = Depends(require_role("admin", "manager"))):
     if data.stage not in STAGE_TO_LABEL:
@@ -3295,6 +3336,14 @@ async def advance_order_stage(oid: str, data: OrderAdvanceIn, user: dict = Depen
     order = await db.orders.find_one({"id": oid}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    # Guard: required docs must be present BEFORE moving the stage
+    missing = _missing_required_docs(order, data.stage)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot move to {STAGE_TO_LABEL[data.stage]} — missing required document(s): {', '.join(missing)}. "
+                   f"Please upload all required files first.",
+        )
     new_stage = data.stage
     label = STAGE_TO_LABEL[new_stage]
     ev = _timeline_event("stage", f"Stage → {label}", user["email"], stage=new_stage, note=data.note or "")
@@ -3323,6 +3372,31 @@ class ProductionUpdateIn(BaseModel):
     note: str
 
 
+class ExpectedCompletionIn(BaseModel):
+    date: Optional[str] = None  # ISO date string "YYYY-MM-DD" or null to clear
+
+
+@api.put("/orders/{oid}/expected-completion")
+async def set_expected_completion(oid: str, data: ExpectedCompletionIn, user: dict = Depends(require_role("admin", "manager"))):
+    order = await db.orders.find_one({"id": oid}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    new_date = (data.date or "").strip() or None
+    # Light validation — accept "YYYY-MM-DD"
+    if new_date:
+        try:
+            datetime.strptime(new_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Date must be in YYYY-MM-DD format")
+    note = f"Expected completion {'set to ' + new_date if new_date else 'cleared'}"
+    ev = _timeline_event("note", note, user["email"])
+    await db.orders.update_one(
+        {"id": oid},
+        {"$set": {"expected_completion_date": new_date, "updated_at": now_iso()}, "$push": {"timeline": ev}},
+    )
+    return await db.orders.find_one({"id": oid}, {"_id": 0})
+
+
 async def _notify_production_update(order: dict, note: str) -> Optional[dict]:
     """Fire WA template (if configured) + branded email for an ad-hoc production update note.
     The template body must accept body vars: {{1}}=customer, {{2}}=order#, {{3}}=note, {{4}}=timestamp."""
@@ -3338,7 +3412,15 @@ async def _notify_production_update(order: dict, note: str) -> Optional[dict]:
             email = email or (live.get("email") or "").strip()
     customer = order.get("contact_name") or order.get("contact_company") or "Customer"
     ord_no = order.get("order_number") or ""
-    timestamp = datetime.now().strftime("%d-%m-%Y %H:%M")
+    timestamp_raw = datetime.now().strftime("%d-%m-%Y %H:%M")
+    eta = (order.get("expected_completion_date") or "").strip()
+    eta_pretty = ""
+    if eta:
+        try:
+            eta_pretty = datetime.strptime(eta, "%Y-%m-%d").strftime("%d-%b-%Y")
+        except Exception:
+            eta_pretty = eta
+    timestamp = f"{timestamp_raw}  ·  Expected completion: {eta_pretty}" if eta_pretty else timestamp_raw
     result: Dict[str, Any] = {"kind": "production_update", "note": note, "whatsapp": False, "email": False, "at": now_iso()}
 
     # ---- WhatsApp ----
@@ -3376,9 +3458,14 @@ async def _notify_production_update(order: dict, note: str) -> Optional[dict]:
     if email and sm.get("enabled") and sm.get("host") and sm.get("username") and sm.get("password") and sm.get("from_email"):
         try:
             subject = f"Production Update — {ord_no}"
+            eta_block_html = ""
+            if eta_pretty:
+                eta_block_html = f"<div style='margin-top:10px;background:#1A1A1A;color:#FBAE17;padding:10px 14px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;letter-spacing:0.5px;'>EXPECTED COMPLETION · {eta_pretty}</div>"
             body_text = (
                 f"Hello {customer},\n\nProduction update on your order {ord_no}:\n\n"
-                f"\"{note}\"\n\nUpdated: {timestamp}\n\nTrack your order live in our customer portal.\n\n"
+                f"\"{note}\"\n\nUpdated: {timestamp_raw}\n"
+                + (f"Expected completion: {eta_pretty}\n" if eta_pretty else "")
+                + "\nTrack your order live in our customer portal.\n\n"
                 "Team HRExporter\nAn ISO 9001:2015 Certified Company"
             )
             body_html = f"""<!doctype html>
@@ -3390,7 +3477,8 @@ async def _notify_production_update(order: dict, note: str) -> Optional[dict]:
 <h2 style="margin:0 0 16px;color:#1A1A1A;font-size:20px;font-weight:900;">Production Update</h2>
 <p style="margin:0 0 18px;color:#3f3f46;font-size:14px;line-height:1.6;">Hello {customer}, here's the latest update from our production floor:</p>
 <blockquote style="margin:0 0 18px;padding:14px 16px;background:#fafafa;border-left:4px solid #FBAE17;color:#1A1A1A;font-size:15px;line-height:1.55;font-style:italic;">{note}</blockquote>
-<div style="background:#FBAE17;color:#1A1A1A;padding:10px 14px;font-family:'Courier New',monospace;font-size:12px;font-weight:bold;">UPDATED · {timestamp}</div>
+<div style="background:#FBAE17;color:#1A1A1A;padding:10px 14px;font-family:'Courier New',monospace;font-size:12px;font-weight:bold;">UPDATED · {timestamp_raw}</div>
+{eta_block_html}
 </td></tr>
 <tr><td style="background:#fafafa;color:#a1a1aa;padding:14px 24px;font-size:11px;text-align:center;border-top:1px solid #e4e4e7;">An ISO 9001:2015 Certified Company &middot; info@hrexporter.com</td></tr>
 </table></body></html>"""
@@ -3687,6 +3775,21 @@ async def upload_dispatch_docs(
     order = await db.orders.find_one({"id": oid}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    # Determine final state of the two required docs after this upload
+    existing_docs = order.get("documents") or {}
+    will_have_invoice = (invoice is not None) or bool((existing_docs.get("invoice") or {}).get("filename"))
+    will_have_eway = (eway_bill is not None) or bool((existing_docs.get("eway_bill") or {}).get("filename"))
+    if not (will_have_invoice and will_have_eway):
+        missing = []
+        if not will_have_invoice: missing.append("Tax Invoice")
+        if not will_have_eway: missing.append("E-way Bill")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot mark Dispatched — missing required document(s): {', '.join(missing)}. "
+                   f"Please attach all dispatch documents before proceeding.",
+        )
+
     set_ops: Dict[str, Any] = {"updated_at": now_iso()}
     events: List[dict] = []
     if invoice is not None:

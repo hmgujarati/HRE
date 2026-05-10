@@ -87,6 +87,16 @@ export default function OrderView() {
     finally { setBusy(false); }
   };
 
+  const saveExpectedCompletion = async (date) => {
+    setBusy(true);
+    try {
+      await api.put(`/orders/${id}/expected-completion`, { date: date || null });
+      toast.success(date ? "Expected completion date saved" : "Expected completion date cleared");
+      load();
+    } catch (e) { toast.error(formatApiError(e?.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+
   return (
     <div className="animate-fade-in">
       <div className="px-4 sm:px-8 py-4 border-b border-zinc-200 bg-zinc-50 flex items-center justify-between flex-wrap gap-2">
@@ -109,6 +119,8 @@ export default function OrderView() {
         {/* Left: Stage actions */}
         <div className="lg:col-span-2 space-y-6">
           <ContactCard order={order} />
+
+          <ExpectedCompletionEditor order={order} onSave={saveExpectedCompletion} busy={busy} />
 
           <StageActions
             order={order}
@@ -264,6 +276,54 @@ function DocRow({ label, doc, number }) {
     </div>
   );
 }
+
+function ExpectedCompletionEditor({ order, onSave, busy }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(order.expected_completion_date || "");
+  useEffect(() => { setVal(order.expected_completion_date || ""); }, [order.expected_completion_date]);
+  const display = order.expected_completion_date
+    ? new Date(order.expected_completion_date + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+    : "Not set";
+  const save = async () => {
+    await onSave(val);
+    setEditing(false);
+  };
+  return (
+    <div className="border border-zinc-200 bg-white p-5">
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Expected Completion</div>
+          <div className="text-xs text-zinc-500 mb-2">Visible to the customer in every WhatsApp + Email update.</div>
+          {!editing ? (
+            <div className="flex items-center gap-3">
+              <span className={`text-lg font-bold ${order.expected_completion_date ? "text-[#1A1A1A]" : "text-zinc-400 italic"}`} data-testid="eta-display">{display}</span>
+              <button onClick={() => setEditing(true)} className="text-xs uppercase font-bold tracking-wider text-[#FBAE17] hover:text-[#E59D12]" data-testid="eta-edit-btn">
+                {order.expected_completion_date ? "Change" : "Set"}
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="date"
+                value={val}
+                onChange={(e) => setVal(e.target.value)}
+                className="border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:border-[#FBAE17]"
+                data-testid="eta-input"
+                min={new Date().toISOString().slice(0, 10)}
+              />
+              <button onClick={save} disabled={busy} className="bg-[#FBAE17] hover:bg-[#E59D12] text-black text-xs uppercase tracking-wider font-bold px-3 py-2 disabled:opacity-50" data-testid="eta-save-btn">Save</button>
+              {order.expected_completion_date && (
+                <button onClick={() => onSave("")} disabled={busy} className="text-xs uppercase tracking-wider font-bold text-red-500 hover:text-red-700 px-2" data-testid="eta-clear-btn">Clear</button>
+              )}
+              <button onClick={() => { setEditing(false); setVal(order.expected_completion_date || ""); }} className="text-xs uppercase tracking-wider font-bold text-zinc-500 hover:text-black px-2">Cancel</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 function StageActions({ order, onAdvance, onRawMaterial, onGeneratePI, onGenerateInvoice, onUploaded, busy }) {
   const stage = order.stage;

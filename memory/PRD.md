@@ -116,6 +116,13 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - Image upload MIME/magic-byte validation + cleanup of replaced files
 - FastAPI lifespan (replace deprecated on_event)
 
+## Expected Completion Date + Doc Guards on Stage Advance (2026-05-10)
+- New field `expected_completion_date` on orders (YYYY-MM-DD). New endpoint `PUT /api/orders/{oid}/expected-completion`. Frontend: editable card on OrderView with Set/Change/Clear actions.
+- Notifications enriched: when ETA is set, both WhatsApp `{{4}}` (Updated:) and Email body now show `· Expected completion: 25-Jun-2026`. Email also has a black/yellow ETA badge below the timestamp. No Meta template re-approval needed — fits inside the existing `{{4}}` slot.
+- New `STAGE_REQUIRED_DOCS` map enforces required docs on `/orders/{oid}/advance` (proforma_issued → PI; dispatched → Tax Invoice + E-way Bill; lr_received → LR Copy). Returns 400 with friendly message: "Cannot move to {stage} — missing required document(s): X, Y."
+- `/orders/{oid}/upload-dispatch` also enforces both Tax Invoice + E-way Bill before allowing the dispatched transition. Prevents the silent advance the user reported.
+- Public `_public_order_summary` now also exposes `expected_completion_date` so it can be shown on `/my-quotes` tracking strip.
+
 ## Bug fixes — stage notifications + production updates (2026-05-10)
 - **Email not sending fix**: `_order_auto_notify` was calling `_send_email_sync` which doesn't exist; the actual function is `_send_smtp_email`. Renamed all 3 references. Confirmed with live test: production update on `HRE/ORD/2026-27/0003` now returns `email: True` (sent to hmgujarati@gmail.com).
 - **Duplicate "in" fix**: Approved Meta templates often hardcode "is now in {{3}}" in the body. Passing `STAGE_TO_LABEL["in_production"]="In Production"` produced "is now in In Production". Added `STAGE_TEMPLATE_LABEL` map that strips redundant connectors (in_production → "Production"). All other stages use the same label.
