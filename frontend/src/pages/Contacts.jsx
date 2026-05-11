@@ -169,8 +169,8 @@ export default function Contacts() {
               <Field label="Name *">
                 <input required value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} className="cinp" data-testid="contact-name-input" />
               </Field>
-              <Field label="Company">
-                <input value={edit.company || ""} onChange={(e) => setEdit({ ...edit, company: e.target.value })} className="cinp" data-testid="contact-company-input" />
+              <Field label="Company *">
+                <input required value={edit.company || ""} onChange={(e) => setEdit({ ...edit, company: e.target.value })} className="cinp" data-testid="contact-company-input" />
               </Field>
               <Field label="Phone">
                 <input value={edit.phone || ""} onChange={(e) => setEdit({ ...edit, phone: e.target.value })} className="cinp font-mono" placeholder="+91 98xxx xxxxx" data-testid="contact-phone-input" />
@@ -181,8 +181,8 @@ export default function Contacts() {
               <Field label="GST Number">
                 <input value={edit.gst_number || ""} onChange={(e) => setEdit({ ...edit, gst_number: e.target.value })} className="cinp font-mono" placeholder="22AAAAA0000A1Z5" />
               </Field>
-              <Field label="State">
-                <input value={edit.state || ""} onChange={(e) => setEdit({ ...edit, state: e.target.value })} className="cinp" placeholder="Maharashtra" />
+              <Field label="State *">
+                <input required value={edit.state || ""} onChange={(e) => setEdit({ ...edit, state: e.target.value })} className="cinp" placeholder="Gujarat / Maharashtra / …" data-testid="contact-state-input" />
               </Field>
               <Field label="Source">
                 <select value={edit.source || "manual"} onChange={(e) => setEdit({ ...edit, source: e.target.value })} className="cinp bg-white">

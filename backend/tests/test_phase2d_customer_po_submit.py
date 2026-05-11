@@ -176,10 +176,15 @@ class TestBPromoteQuoteToSent:
         assert r.status_code == 200, r.text
         r2 = admin_client.patch(f"{BASE_URL}/api/quotations/{qid}/status", json={"status": "sent"})
         assert r2.status_code == 200, r2.text
+        # Per business rule (2026-05-11): customers can only upload a PO once the
+        # admin has APPROVED the quote — not just sent it. Flip to approved here
+        # so the downstream PO-submission tests have a valid pre-condition.
+        r3 = admin_client.patch(f"{BASE_URL}/api/quotations/{qid}/status", json={"status": "approved"})
+        assert r3.status_code == 200, r3.text
         r = admin_client.get(f"{BASE_URL}/api/quotations/{qid}")
         assert r.status_code == 200
         q = r.json()
-        assert q.get("status") in ("sent", "approved"), f"expected sent/approved got {q.get('status')}"
+        assert q.get("status") == "approved", f"expected approved got {q.get('status')}"
 
 
 # ============================================================

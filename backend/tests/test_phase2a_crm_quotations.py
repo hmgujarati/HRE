@@ -128,6 +128,7 @@ class TestContacts:
             "name": "TEST_Alice PhoneMatch", "company": "X",
             "phone": "0091 99999-88888",  # normalised last 10 digits same as 9999988888
             "email": "TEST_alice_other@example.com",
+            "state": "Karnataka",
             "source": "whatsapp",
         }
         r = admin_client.post(f"{BASE_URL}/api/contacts", json=payload)

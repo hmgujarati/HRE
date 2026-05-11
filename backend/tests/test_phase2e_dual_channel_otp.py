@@ -92,7 +92,7 @@ def _create_qr(api, name: str = "TEST_OTP", phone: str = HARSH_PHONE,
                 email: str = HARSH_EMAIL) -> str:
     payload = {
         "name": name, "company": "TEST Co", "phone": phone, "email": email,
-        "gst_number": "", "state": "", "billing_address": "x", "shipping_address": "x",
+        "gst_number": "", "state": "Karnataka", "billing_address": "x", "shipping_address": "x",
     }
     r = api.post(f"{BASE_URL}/api/public/quote-requests/start", json=payload)
     assert r.status_code == 200, f"start QR failed: {r.status_code} {r.text}"

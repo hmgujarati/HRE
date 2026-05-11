@@ -1,0 +1,52 @@
+{
+  "summary": "Validated the 2026-05-11 business-rule batch on the HRE Exporter CRM backend. Created /app/backend/tests/test_iteration7_new_behaviors.py with 17 targeted tests covering: (a) multi-order from same quote via both /api/orders/from-quote and /api/quotations/.../convert-to-order — both return 200 with distinct HRE/ORD/... numbers; (b) /contacts POST+PUT state/company validation (4/4 pass, returns 400 with correct messages); (c) /api/public/quote-requests/start state+company required (3/3 pass); (d) new /api/public/me + /api/public/me/quote/create end-to-end with a real OTP session (3/3 pass — dev_otp passthrough works); (e) PO submit gate now requires 'approved' status — 'sent' is rejected with 400 (2/2 pass); (f) /quotations/.../archive + /unarchive + ?archived=true filter (1/1 pass); (g) DELETE /quotations/{qid} without orders returns 200 (1/1 pass) BUT with-orders order-guard is BROKEN (returns 200 instead of 409). Result: 16/17 of the new behavior tests PASS. Re-ran the full Phase 2 regression suite — 99/100 (the 1 known pre-existing flake test_advance_through_production_stages from iter_6 unchanged). WA bot flow tests (4/4) including the updated full-flow-to-proforma which now asserts ASK_STATE step and QUOTATION-only finalization — all PASS. No new regressions introduced by the batch except the duplicate-DELETE-route bug below.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "DELETE /api/quotations/{qid}",
+        "issue": "Order-linked delete guard is DEAD CODE. routers/quotations.py registers TWO @router.delete('/quotations/{qid}') handlers — the OLD one at line 216 (no guard, just deletes) and the NEW one at line 347 (with 409-if-order-exists guard). FastAPI uses the FIRST registered route, so the new guard never executes. Reproduced via curl: created quote f25fc8a5..., POSTed /orders/from-quote (got HRE/ORD/2026-27/0026 with quote_id=f25fc8a5...), then DELETE /quotations/f25fc8a5... → returns 200 {'ok':true} instead of 409. This breaks user requirement (g): 'Deleted quotes that have orders return 409 — archive instead.' Fix: delete the stale handler at routers/quotations.py:216-221 (keep only the guarded one at line 347). Also: line 216 returns 404 via deleted_count==0 — the new handler at line 347 already replicates that behaviour, so removal is safe.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/orders + POST /api/orders/{oid}/advance",
+        "issue": "Pre-existing flake (carried over from iter_6): test_phase2bc_dispatch_orders.py::TestOrders::test_advance_through_production_stages fails because the seed order lacks documents.invoice + documents.eway_bill. STAGE_REQUIRED_DOCS gate correctly returns 400. Not introduced by this batch."
+      },
+      {
+        "endpoint": "Carried over from iter_5/6",
+        "issue": "DEV_OTP_PASSTHROUGH defaults to 'true' (server.py:1375). Production-leak risk. (Note: in this iter, having it 'true' was actually convenient for the new /public/me OTP flow tests.)"
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration7_new_behaviors.py",
+    "/app/test_reports/pytest/iteration7_new_behaviors.xml",
+    "/app/test_reports/pytest/iteration7_phase2.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Remove the stale unguarded `@router.delete('/quotations/{qid}')` handler at routers/quotations.py:216-221 so that the guarded one at line 347 takes effect. Currently the user-visible rule (g) — 'cannot delete a quote that has orders' — is silently bypassed; data integrity at risk.",
+    "Optional cleanup carried over from iter_6: fix test_advance_through_production_stages by pre-uploading invoice+eway in setup; default DEV_OTP_PASSTHROUGH to 'false' for prod."
+  ],
+  "critical_code_review_comments": [
+    "routers/quotations.py has DUPLICATE @router.delete('/quotations/{qid}') decorators (lines 216 and 347). FastAPI silently uses the first; the second is dead code. This is the root cause of the order-guard regression — found while validating user requirement (g). Always grep `@(api|router)\\.(get|post|put|delete|patch)` for duplicates after batched changes.",
+    "server.py:1329 is now 1329 lines — main agent flagged it last iter and it has grown again. Endpoint blocks for /public/me, /public/me/quote/create, /public/quote/.../submit-po, and _bot_finalize_quote should move into routers/public.py to bring server.py under the 700-line ceiling.",
+    "/public/me/quote/create constructs the quote dict inline (server.py:595-623) — that logic duplicates /public/quote-requests/{rid}/finalise (server.py:486-540). Extract a shared helper `_build_quote_from_contact(contact, line_items, notes)` to avoid drift.",
+    "Public-session OTP delivery silently falls back to dev_otp passthrough if both WA + SMTP fail. Good for dev, but the response includes the raw OTP in JSON — confirm this is gated by env DEV_OTP_PASSTHROUGH (it is, server.py:329) and that the prod settings ship with DEV_OTP_PASSTHROUGH=false."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration7_new_behaviors.py (new)"
+  ],
+  "success_rate": {
+    "backend": "16/17 (94%) on new-behavior tests + 99/100 Phase 2 regression = 115/117 overall (98.3%). The single new-behavior failure (delete-with-order returns 200 instead of 409) is a real product bug. The single regression failure is a pre-existing flake.",
+    "frontend": "not tested (backend-only request, frontend skipped per the brief)"
+  },
+  "test_credentials": "admin@hrexporter.com / Admin@123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Each test class creates/cleans its own contacts + quotes + orders with TEST_ prefix where applicable. Public-session module fixture starts a real OTP flow via /api/public/quote-requests/start → /send-otp (uses DEV_OTP_PASSTHROUGH dev_otp passthrough) → /verify-otp.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Re-run `pytest /app/backend/tests/test_iteration7_new_behaviors.py -v` after main agent removes the stale DELETE handler at routers/quotations.py:216 — test_delete_quote_with_order_returns_409 should then pass. Full phase 2 regression: `pytest /app/backend/tests/test_phase2a_crm_quotations.py tests/test_phase2bc_dispatch_orders.py tests/test_phase2d_customer_po_submit.py tests/test_phase2e_dual_channel_otp.py tests/test_whatsapp_bot_flow.py -v`. The pre-existing test_advance_through_production_stages flake is unchanged from iter_6 and is NOT related to this batch.",
+  "rca of the issue": "DELETE /api/quotations/{qid} order-guard bug: When the main agent landed the new guarded handler at routers/quotations.py:347 for user requirement (g) ('Deleted quotes that have orders return 409 — archive instead'), they did not remove the legacy unguarded handler at line 216. Both decorators register the same path/method on the same router; FastAPI silently keeps the first and discards the second. Repro steps: (1) login as admin, (2) pick an approved quote QID, (3) POST /api/orders/from-quote/{QID} → 200 with quote_id=QID, (4) DELETE /api/quotations/{QID} → 200 {'ok':true} (BUG; expected 409 with 'archive instead' message). Mitigation: delete routers/quotations.py lines 216-221 (the stale 5-line handler). The new handler at line 347 already covers the 404-on-missing path with the same return shape. After the deletion, also add a duplicate-route assertion in CI (e.g. unit-test that asserts only one DELETE route exists for /quotations/{qid})."
+}

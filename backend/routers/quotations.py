@@ -50,9 +50,15 @@ async def list_quotations(
     status_filter: Optional[str] = None,
     contact_id: Optional[str] = None,
     q: Optional[str] = None,
+    archived: bool = False,
     _: dict = Depends(get_current_user),
 ):
     query: Dict[str, Any] = {}
+    # By default hide archived quotes; pass ?archived=true to view the archive.
+    if archived:
+        query["archived"] = True
+    else:
+        query["archived"] = {"$ne": True}
     if status_filter:
         query["status"] = status_filter
     if contact_id:
@@ -118,6 +124,7 @@ async def create_quotation(data: QuoteIn,
         "sent_at": None,
         "approved_at": None,
         "rejected_at": None,
+        "archived": False,
     }
     await db.quotations.insert_one(doc.copy())
     doc.pop("_id", None)
@@ -312,3 +319,44 @@ async def quote_convert_to_order(
     canonical order-minting handler now in routers/orders.py."""
     from routers.orders import create_order_from_quote
     return await create_order_from_quote(qid, data, user)
+
+
+
+@router.post("/quotations/{qid}/archive")
+async def archive_quotation(qid: str, _: dict = Depends(require_role("admin", "manager"))):
+    """Soft-hide a quotation. Hidden from default list; visible via ?archived=true."""
+    res = await db.quotations.update_one(
+        {"id": qid}, {"$set": {"archived": True, "updated_at": now_iso()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    return {"ok": True, "archived": True}
+
+
+@router.post("/quotations/{qid}/unarchive")
+async def unarchive_quotation(qid: str, _: dict = Depends(require_role("admin", "manager"))):
+    """Restore an archived quotation back to the default list."""
+    res = await db.quotations.update_one(
+        {"id": qid}, {"$set": {"archived": False, "updated_at": now_iso()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    return {"ok": True, "archived": False}
+
+
+@router.delete("/quotations/{qid}")
+async def delete_quotation(qid: str, _: dict = Depends(require_role("admin"))):
+    """Hard delete (admin-only). Cannot be undone."""
+    quote = await db.quotations.find_one({"id": qid}, {"_id": 0, "id": 1})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    # Block delete if any order exists for this quote (data integrity).
+    has_order = await db.orders.find_one({"quote_id": qid}, {"_id": 0, "id": 1, "order_number": 1})
+    if has_order:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete — order {has_order['order_number']} was created from this quote. "
+                   f"Archive it instead.",
+        )
+    await db.quotations.delete_one({"id": qid})
+    return {"ok": True, "deleted": True}

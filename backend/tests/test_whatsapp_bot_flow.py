@@ -155,7 +155,8 @@ def test_full_flow_to_proforma():
         r = await step("Get a Quote", "1"); assert r["state"] == "ask_name"
         r = await step("Test Bot Pytest"); assert r["state"] == "ask_email"
         r = await step("pytest@x.com"); assert r["state"] == "ask_company"
-        r = await step("ACME Pytest"); assert r["state"] == "pick_material"
+        r = await step("ACME Pytest"); assert r["state"] == "ask_state"
+        r = await step("Gujarat"); assert r["state"] == "pick_material"
 
         btn_msg = next((p for path, p in reversed(captured)
                         if path == "send-interactive-message" and p.get("interactive_type") == "button"), None)
@@ -196,12 +197,12 @@ def test_full_flow_to_proforma():
         assert quote["quote_number"].startswith("HRE/QT/")
         assert len(quote["line_items"]) == 1
         assert quote["grand_total"] > 0
+        assert quote.get("place_of_supply") == "Gujarat", "place_of_supply should propagate from ASK_STATE answer"
 
-        order = await db.orders.find_one({"id": r["order_id"]}, {"_id": 0})
-        assert order and order["stage"] == "proforma_issued"
-        assert order["order_number"].startswith("HRE/ORD/")
-        assert order["proforma"]["number"].startswith("HRE/PI/")
-        assert order["proforma"]["filename"].endswith(".pdf")
+        # The bot now produces a QUOTATION only — NO auto-order, NO PI.
+        assert "order_id" not in r, "Bot must not auto-create an order any more"
+        order = await db.orders.find_one({"quote_id": quote["id"]}, {"_id": 0})
+        assert order is None, "No order should be created by the bot flow"
 
         await _cleanup(db, PHONE, PHONE_NORM)
 

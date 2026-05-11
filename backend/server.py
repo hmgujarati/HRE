@@ -133,10 +133,11 @@ from whatsapp_bot import dispatch as bot_dispatch, parse_inbound as bot_parse_in
 
 
 async def _bot_finalize_quote(*, line_items: List[Dict[str, Any]], customer: Dict[str, Any], source: str) -> dict:
-    """Build a finalized Quotation from bot-collected line items, auto-convert to
-    an Order, generate the Proforma Invoice PDF, and dispatch it via WA + Email.
-    Returns: {quote_id, quote_number, order_id, order_number, proforma{number, url},
-              grand_total, contact_email, contact_phone}."""
+    """Build a finalized *Quotation* from bot-collected line items and dispatch
+    it (PDF + WA + Email). NO order or Proforma Invoice is created here —
+    those happen later in the admin → approved → customer-uploads-PO →
+    admin-generates-PI lifecycle.
+    Returns: {quote_id, quote_number, grand_total, contact_email, contact_phone}."""
     if not line_items:
         raise HTTPException(status_code=400, detail="No items to quote")
     phone = customer.get("phone") or ""
@@ -150,6 +151,7 @@ async def _bot_finalize_quote(*, line_items: List[Dict[str, Any]], customer: Dic
             "company": customer.get("company") or "",
             "phone": phone,
             "phone_norm": phone_norm,
+            "state": customer.get("state") or "",
             "created_at": now_iso(),
             "source": "whatsapp_bot",
         }
@@ -211,93 +213,25 @@ async def _bot_finalize_quote(*, line_items: List[Dict[str, Any]], customer: Dic
         "sent_at": now_iso(),
         "approved_at": None,
         "rejected_at": None,
+        "archived": False,
         "dispatch_log": [],
     }
     await db.quotations.insert_one(quote.copy())
 
-    # Mint an Order from the quote (pending_po) and immediately move to proforma_issued.
-    order = _mint_order_from_quote(quote, "whatsapp_bot", po_number="")
-    order["order_number"] = await _next_order_number()
-    order["timeline"] = [
-        _timeline_event("created", "Order auto-created from WhatsApp bot quote",
-                        "whatsapp_bot", quote_number=qno),
-    ]
-    await db.orders.insert_one(order.copy())
-
-    # Generate the Proforma Invoice PDF (mirrors /api/orders/{oid}/proforma/generate).
-    from quote_pdf import render_quote_pdf
-    pi_no = await _next_pi_number()
-    out_dir = UPLOAD_DIR / "orders" / order["id"]
-    out_dir.mkdir(parents=True, exist_ok=True)
-    safe = re.sub(r"[^A-Za-z0-9_-]", "_", pi_no)
-    ts = _now_dt().strftime("%Y%m%d%H%M%S")
-    out = out_dir / f"proforma_{safe}_{ts}.pdf"
-    doc_src = {
-        **order,
-        "quote_number": pi_no,
-        "created_at": now_iso(),
-        "valid_until": (_now_dt() + timedelta(days=15)).date().isoformat(),
-        "notes": order.get("notes") or "",
-        "terms": "PAYMENT: 50% advance, 50% before dispatch.\nDelivery: 15-20 working days post advance.\nPrices are ex-works unless specified.",
-    }
-    logo = UPLOAD_DIR.parent.parent / "frontend" / "public" / "hre-logo-light-bg.png"
-    logo_url = logo.as_uri() if logo.exists() else None
-    loop = asyncio.get_event_loop()
+    # Ship the QUOTATION PDF via WA + Email (no order, no PI — those happen
+    # only after admin approval and customer PO upload).
     try:
-        await loop.run_in_executor(None, lambda: render_quote_pdf(doc_src, out, logo_url, "PROFORMA INVOICE"))
-        public_url = f"{PUBLIC_BASE_URL}/api/uploads/orders/{order['id']}/{out.name}" if PUBLIC_BASE_URL else f"/api/uploads/orders/{order['id']}/{out.name}"
-        proforma = {
-            "number": pi_no,
-            "filename": out.name,
-            "url": public_url,
-            "generated_at": now_iso(),
-            "generated_by": "whatsapp_bot",
-            "source": "generated",
-        }
-        ev = _timeline_event("proforma", f"Proforma Invoice {pi_no} generated", "whatsapp_bot")
-        await db.orders.update_one(
-            {"id": order["id"]},
-            {"$set": {"proforma": proforma, "stage": "proforma_issued", "updated_at": now_iso()},
-             "$push": {"timeline": ev}},
-        )
+        await _dispatch_finalised_quote(quote)
     except Exception:
-        logger.exception(f"[bot-finalize] proforma PDF generation failed for {pi_no}")
-        # We continue — at least quote + order exist; admin can regenerate.
+        logger.exception(f"[bot-finalize] quote dispatch failed for {qno}")
 
-    # Send the Proforma to the customer via WhatsApp + Email (auto-notify).
-    updated = await db.orders.find_one({"id": order["id"]}, {"_id": 0})
-    if updated and updated.get("stage") == "proforma_issued":
-        try:
-            notify = await _order_auto_notify(updated, "proforma_issued")
-            if notify:
-                notify["stage"] = "proforma_issued"
-                notify["at"] = now_iso()
-                await _persist_order_notification(order["id"], notify)
-        except Exception:
-            logger.exception(f"[bot-finalize] proforma auto-notify failed for {pi_no}")
-
-    fresh = await db.orders.find_one({"id": order["id"]}, {"_id": 0}) or order
     return {
         "quote_id": quote["id"],
         "quote_number": qno,
-        "order_id": order["id"],
-        "order_number": order["order_number"],
-        "proforma": fresh.get("proforma") or {"number": pi_no},
         "grand_total": float(quote.get("grand_total") or 0),
         "contact_email": contact.get("email"),
         "contact_phone": contact.get("phone"),
     }
-
-
-
-
-
-
-
-
-
-
-    return datetime.now(timezone.utc)
 
 
 def _strip_pricing_fields(obj: dict) -> dict:
@@ -341,6 +275,10 @@ async def public_qr_start(data: QuoteRequestStart):
         raise HTTPException(status_code=400, detail="Valid 10-digit phone number required")
     if not data.email:
         raise HTTPException(status_code=400, detail="Email is required so we can email you the quote PDF")
+    if not (data.company or "").strip():
+        raise HTTPException(status_code=400, detail="Company name is required")
+    if not (data.state or "").strip():
+        raise HTTPException(status_code=400, detail="State is required (used for GST: CGST+SGST within Gujarat, IGST otherwise)")
     doc = {
         "id": str(uuid.uuid4()),
         "name": data.name.strip(),
@@ -440,6 +378,32 @@ async def _resolve_public_session(token: Optional[str]) -> dict:
     if datetime.fromisoformat(sess["expires_at"]) < _now_dt():
         raise HTTPException(status_code=401, detail="Session expired")
     return sess
+
+
+@api.get("/public/me")
+async def public_me(token: str):
+    """Resolve the public OTP session token to the customer's contact profile.
+    Used by the public quote builder to skip the 'enter your details' step for
+    already-logged-in customers."""
+    sess = await _resolve_public_session(token)
+    phone_norm = sess.get("phone_norm") or ""
+    contact = await _find_contact_match(sess.get("phone") or "", "") if phone_norm == "" else \
+              await db.contacts.find_one({"phone_norm": phone_norm}, {"_id": 0})
+    if not contact:
+        return {"contact": None}
+    return {
+        "contact": {
+            "id": contact.get("id"),
+            "name": contact.get("name") or "",
+            "company": contact.get("company") or "",
+            "phone": contact.get("phone") or "",
+            "email": contact.get("email") or "",
+            "gst_number": contact.get("gst_number") or "",
+            "state": contact.get("state") or "",
+            "billing_address": contact.get("billing_address") or "",
+            "shipping_address": contact.get("shipping_address") or "",
+        }
+    }
 
 
 @api.get("/public/variants")
@@ -583,8 +547,92 @@ async def public_qr_finalise(rid: str, payload: FinalisePayload, token: str):
     }
 
 
+@api.post("/public/me/quote/create")
+async def public_me_create_quote(payload: FinalisePayload, token: str):
+    """Logged-in customer (with a valid public session) creates a quote directly
+    using their existing contact profile — bypasses the OTP/details form.
+    Mirrors `/public/quote-requests/{rid}/finalise` but reads name/state/etc.
+    from the contact record."""
+    sess = await _resolve_public_session(token)
+    phone_norm = sess.get("phone_norm") or ""
+    contact = await db.contacts.find_one({"phone_norm": phone_norm}, {"_id": 0})
+    if not contact:
+        raise HTTPException(status_code=404, detail="No customer profile found for this session — please request an OTP again.")
+    # Enforce the same mandatory-field rule we apply at signup.
+    if not (contact.get("company") or "").strip():
+        raise HTTPException(status_code=400, detail="Your profile is missing a company name — please contact support.")
+    if not (contact.get("state") or "").strip():
+        raise HTTPException(status_code=400, detail="Your profile is missing state — please contact support.")
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+
+    line_items: List[Dict[str, Any]] = []
+    for ci in payload.items:
+        v = await db.product_variants.find_one({"id": ci.product_variant_id, "active": True}, {"_id": 0})
+        if not v:
+            continue
+        fam = await db.product_families.find_one({"id": v["product_family_id"]}, {"_id": 0})
+        line_items.append({
+            "product_variant_id": v["id"],
+            "product_code": v["product_code"],
+            "family_name": (fam or {}).get("family_name", ""),
+            "description": "",
+            "cable_size": v.get("cable_size", ""),
+            "hole_size": v.get("hole_size", ""),
+            "dimensions": v.get("dimensions", {}),
+            "hsn_code": v.get("hsn_code", "85369090"),
+            "quantity": float(ci.quantity or 0),
+            "unit": v.get("unit", "NOS"),
+            "base_price": float(v.get("final_price") or v.get("base_price") or 0),
+            "discount_percentage": 0.0,
+            "gst_percentage": float(v.get("gst_percentage") or 18),
+        })
+    if not line_items:
+        raise HTTPException(status_code=400, detail="No valid variants in cart")
+
+    totals = _compute_quote_totals(line_items)
+    qnum = await _next_quote_number()
+    quote = {
+        "id": str(uuid.uuid4()),
+        "quote_number": qnum,
+        "version": 1,
+        "parent_quote_id": None,
+        "status": "sent",
+        "self_service": True,
+        "contact_id": contact["id"],
+        "contact_name": contact.get("name", ""),
+        "contact_company": contact.get("company", ""),
+        "contact_email": contact.get("email", ""),
+        "contact_phone": contact.get("phone", ""),
+        "contact_gst": contact.get("gst_number", ""),
+        "billing_address": contact.get("billing_address", ""),
+        "shipping_address": contact.get("shipping_address", ""),
+        "place_of_supply": contact.get("state", ""),
+        "currency": "INR",
+        "valid_until": (_now_dt() + timedelta(days=30)).date().isoformat(),
+        "notes": payload.notes or "",
+        "terms": "Prices are exclusive of freight unless specified.\nValidity: 30 days.\nPayment: 50% advance, 50% before dispatch.",
+        "line_items": line_items,
+        **totals,
+        "created_by": f"self-service ({contact.get('phone', '')})",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "sent_at": now_iso(),
+        "approved_at": None, "rejected_at": None,
+        "archived": False,
+    }
+    await db.quotations.insert_one(quote.copy())
+    delivery = await _dispatch_finalised_quote(quote)
+    logger.info(f"[Self-Service Quote (logged-in)] {qnum} created for {contact.get('phone')} delivery={delivery}")
+    return {
+        "id": quote["id"],
+        "quote_number": qnum,
+        "grand_total": quote["grand_total"],
+        "delivery": delivery,
+    }
+
+
 def _public_order_summary(order: dict) -> dict:
-    """Return a customer-safe order tracking snapshot (no internal user emails, no production notes)."""
     if not order:
         return None
     stage = order.get("stage") or "pending_po"
@@ -779,8 +827,8 @@ async def public_submit_po(
     contact = await db.contacts.find_one({"id": quote.get("contact_id")}, {"_id": 0})
     if not contact or contact.get("phone_norm") != sess["phone_norm"]:
         raise HTTPException(status_code=403, detail="This quote does not belong to your phone")
-    if quote.get("status") not in ("approved", "sent"):
-        raise HTTPException(status_code=400, detail="Quote is not yet ready to receive a PO. Please ask our team to send the quote first.")
+    if quote.get("status") != "approved":
+        raise HTTPException(status_code=400, detail="This quote is not yet approved. Please wait for our team to approve it before uploading a PO.")
 
     instructions = (instructions or "").strip()
     has_file = bool(file and (file.filename or "").strip())

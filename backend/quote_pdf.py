@@ -342,7 +342,9 @@ def render_quote_pdf(quote: Dict[str, Any], output_path: Path, logo_url: str | N
     tpl = env.from_string(_TEMPLATE)
 
     buyer_state = (quote.get("place_of_supply") or "").strip().upper()
-    is_interstate = bool(buyer_state) and buyer_state != SELLER["state"]
+    # Per business rule: any state OTHER than the seller's (Gujarat) — including
+    # empty/unknown — is treated as inter-state → IGST. Intra-Gujarat → CGST+SGST.
+    is_interstate = buyer_state != SELLER["state"]
     line_items = quote.get("line_items") or []
     total_qty = sum(float(it.get("quantity") or 0) for it in line_items)
     gst_rate = float((line_items[0].get("gst_percentage") if line_items else 18) or 18)

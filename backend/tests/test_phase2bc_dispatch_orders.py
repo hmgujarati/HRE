@@ -275,30 +275,34 @@ class TestOrders:
         STATE["order_id"] = order["id"]
         STATE["order_number"] = order["order_number"]
 
-    def test_duplicate_convert_rejected(self, admin_client):
+    def test_duplicate_convert_creates_another_order(self, admin_client):
+        """Per business rule (2026-05-11): multiple orders may be created from
+        the same quote. The legacy 409 guard has been removed; a second
+        conversion creates a fresh order with its own unique HRE/ORD/... number."""
         qid = STATE["quote_id"]
         r = admin_client.post(f"{BASE_URL}/api/orders/from-quote/{qid}", json={})
-        assert r.status_code == 409, r.text
+        assert r.status_code == 200, r.text
+        second = r.json()
+        assert second["quote_id"] == qid
+        assert second["id"] != STATE["order_id"]
+        assert second["order_number"] != STATE["order_number"]
 
     def test_convert_to_order_alias_works(self, admin_client):
         """REGRESSION: `POST /api/quotations/{qid}/convert-to-order` is the
         endpoint the frontend Quotation detail page uses. After the orders
         refactor (2026-05-10) this alias was broken by a stale
-        `from server import create_order_from_quote` — guard against
-        that recurring. We hit the alias on the SAME quote that's already been
-        converted, so we expect a 409 — proving the route resolves and
-        delegates correctly to the new routers/orders.py handler instead of
-        crashing with a 500 ImportError."""
+        `from server import create_order_from_quote` — guard against that
+        recurring. We just need the route to resolve and produce a valid 200
+        order response (multiple orders from one quote are now allowed)."""
         qid = STATE["quote_id"]
         r = admin_client.post(
             f"{BASE_URL}/api/quotations/{qid}/convert-to-order",
-            json={"po_number": "TEST_PO_001"},
+            json={"po_number": "TEST_PO_ALIAS"},
         )
-        # 409 means the route + dispatch wiring works (a 500 would mean ImportError)
-        assert r.status_code == 409, r.text
+        assert r.status_code == 200, r.text
         body = r.json()
-        # FastAPI error envelope; the 'already exists' guard from orders.py
-        assert "already exists" in (body.get("detail") or "").lower()
+        assert body["quote_id"] == qid
+        assert body["order_number"], "Missing order_number"
 
     def test_list_orders(self, admin_client):
         r = admin_client.get(f"{BASE_URL}/api/orders")

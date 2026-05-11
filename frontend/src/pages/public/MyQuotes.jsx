@@ -112,7 +112,7 @@ export default function MyQuotes() {
           {quotes.map((q) => {
             const isOpen = !!expanded[q.id];
             const hasOrder = !!q.order;
-            const canSubmitPo = ["sent", "approved"].includes(q.status) && (!hasOrder || q.order.stage === "pending_po");
+            const canSubmitPo = q.status === "approved" && (!hasOrder || q.order.stage === "pending_po");
             const poAlreadySubmitted = hasOrder && q.order.po_submitted_by_customer;
             return (
               <div key={q.id} className="border border-zinc-200 bg-white" data-testid={`my-quote-${q.id}`}>

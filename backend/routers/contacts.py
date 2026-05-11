@@ -56,6 +56,10 @@ async def get_contact(cid: str, _: dict = Depends(get_current_user)):
 @router.post("/contacts")
 async def create_contact(data: ContactIn,
                          user: dict = Depends(require_role("admin", "manager"))):
+    if not (data.company or "").strip():
+        raise HTTPException(status_code=400, detail="Company name is required")
+    if not (data.state or "").strip():
+        raise HTTPException(status_code=400, detail="State is required (used for GST: CGST+SGST within Gujarat, IGST otherwise)")
     doc = data.model_dump()
     doc["phone_norm"] = norm_phone(doc.get("phone"))
     doc["email_norm"] = norm_email(doc.get("email"))
@@ -78,6 +82,10 @@ async def create_contact(data: ContactIn,
 @router.put("/contacts/{cid}")
 async def update_contact(cid: str, data: ContactIn,
                          user: dict = Depends(require_role("admin", "manager"))):
+    if not (data.company or "").strip():
+        raise HTTPException(status_code=400, detail="Company name is required")
+    if not (data.state or "").strip():
+        raise HTTPException(status_code=400, detail="State is required (used for GST: CGST+SGST within Gujarat, IGST otherwise)")
     upd = data.model_dump()
     upd["phone_norm"] = norm_phone(upd.get("phone"))
     upd["email_norm"] = norm_email(upd.get("email"))

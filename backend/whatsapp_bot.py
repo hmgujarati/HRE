@@ -1,12 +1,13 @@
 """WhatsApp Chatbot — inbound message handler + state machine.
 
 Flow:
-  WELCOME → ASK_NAME → ASK_EMAIL → ASK_COMPANY → PICK_MATERIAL → PICK_FAMILY
-        → ASK_CABLE → ASK_HOLE → PICK_VARIANT → ASK_QTY → AFTER_ITEM
-        (Add another → loop back to PICK_MATERIAL)
-        (Review cart → REVIEW_CART → Confirm → FINALIZED)
-        (REVIEW_CART → Remove item → REMOVE_ITEM → back to REVIEW_CART /
-         or AFTER_ITEM if cart becomes empty)
+  WELCOME → ASK_NAME → ASK_EMAIL → ASK_COMPANY → ASK_STATE → PICK_MATERIAL
+        → PICK_FAMILY → ASK_CABLE → ASK_HOLE → PICK_VARIANT → ASK_QTY
+        → AFTER_ITEM (Add another → loop / Review cart → REVIEW_CART)
+        → REVIEW_CART (Confirm → finalise as a QUOTATION via _bot_finalize_quote
+                       / Remove item → REMOVE_ITEM → back to REVIEW_CART)
+  The customer receives a *Quotation* PDF (no order, no PI). PI is generated
+  later, only after admin approval + customer PO upload.
 
 Wired into server.py via:
   - `/api/webhooks/bizchat/inbound` and `/api/webhooks/bizchat/status` (consolidated)
@@ -51,6 +52,7 @@ ST_WELCOME = "welcome"
 ST_ASK_NAME = "ask_name"
 ST_ASK_EMAIL = "ask_email"
 ST_ASK_COMPANY = "ask_company"
+ST_ASK_STATE = "ask_state"
 ST_PICK_MATERIAL = "pick_material"
 ST_PICK_FAMILY = "pick_family"
 ST_ASK_CABLE = "ask_cable"
@@ -689,7 +691,7 @@ async def _send_review_cart(wa: dict, phone: str, line_items: List[dict]):
                if has_items else ["Add another", "Cancel", ""])
     buttons = [b for b in buttons if b]
     body = (f"*Review your cart:*\n\n{summary}\n\n"
-            + ("Ready to receive your Proforma Invoice?" if has_items
+            + ("Ready to receive your Quotation?" if has_items
                else "Your cart is empty — type 'menu' to start over."))
     await _safe_send(send_buttons(
         wa, phone, body_text=body, buttons=buttons, header_text="Cart Review",
@@ -798,6 +800,27 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
                                    "gst_number": contact.get("gst_number") or "",
                                    "state": contact.get("state") or ""}
                 ctx.setdefault("line_items", [])
+                # If this returning contact is missing a required field, fill in
+                # only what's missing — never re-ask for data we already have.
+                missing = []
+                if not (ctx["customer"].get("name") or "").strip(): missing.append("name")
+                if not (ctx["customer"].get("email") or "").strip(): missing.append("email")
+                if not (ctx["customer"].get("company") or "").strip(): missing.append("company")
+                if not (ctx["customer"].get("state") or "").strip(): missing.append("state")
+                if missing:
+                    # Jump to the first missing field's prompt
+                    first = missing[0]
+                    next_state, prompt = {
+                        "name":    (ST_ASK_NAME,    "Welcome back! Quick check — what's your full name?"),
+                        "email":   (ST_ASK_EMAIL,   "Welcome back! What's your email address?"),
+                        "company": (ST_ASK_COMPANY, "Welcome back! What's your company name?"),
+                        "state":   (ST_ASK_STATE,   "Welcome back! Which state are you in? (Used to calculate GST.)"),
+                    }[first]
+                    await _safe_send(send_text(wa, phone, prompt), phone, f"refill_{first}")
+                    await _save_session(db, phone_norm, next_state, ctx,
+                                        {"in": text, "at": _now_dt().isoformat(), "out": f"refill_{first}"})
+                    actions.append(f"returning_customer_missing_{first}")
+                    return {"state": next_state, "customer_phone": phone, "actions_taken": actions}
                 await _safe_send(send_text(wa, phone, f"Welcome back, {contact['name']}! Let's build your quote."),
                                  phone, "returning_welcome")
                 new_state = await _enter_material_picker(ctx)
@@ -855,7 +878,28 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
         return {"state": ST_ASK_COMPANY, "customer_phone": phone, "actions_taken": ["captured_email"]}
 
     if state == ST_ASK_COMPANY:
-        ctx["customer"]["company"] = text.strip() or "—"
+        company = text.strip()
+        if not company or company in {"-", "n/a", "na", "none"}:
+            await _safe_send(send_text(wa, phone,
+                            "Company name is required for the quote. Please type your company name."),
+                             phone, "bad_company")
+            return {"state": ST_ASK_COMPANY, "customer_phone": phone, "actions_taken": ["bad_company"]}
+        ctx["customer"]["company"] = company
+        await _safe_send(send_text(wa, phone,
+                        "Which state are you in? (Used to calculate GST — CGST+SGST within Gujarat, IGST otherwise.)\nExample: Gujarat, Maharashtra, Karnataka"),
+                         phone, "ask_state")
+        await _save_session(db, phone_norm, ST_ASK_STATE, ctx,
+                            {"in": text, "at": _now_dt().isoformat(), "out": "ask_state"})
+        return {"state": ST_ASK_STATE, "customer_phone": phone, "actions_taken": ["captured_company"]}
+
+    if state == ST_ASK_STATE:
+        st = text.strip()
+        if not st or len(st) < 3:
+            await _safe_send(send_text(wa, phone,
+                            "Please type your state name (e.g. Gujarat, Maharashtra)."),
+                             phone, "bad_state")
+            return {"state": ST_ASK_STATE, "customer_phone": phone, "actions_taken": ["bad_state"]}
+        ctx["customer"]["state"] = st.title()
         # Persist new contact (idempotent against repeat sessions)
         existing = await _find_contact_by_phone(db, phone_norm)
         if not existing:
@@ -864,16 +908,16 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
                 "name": ctx["customer"]["name"],
                 "email": ctx["customer"]["email"],
                 "company": ctx["customer"]["company"],
+                "state": ctx["customer"]["state"],
                 "phone": phone,
                 "phone_norm": phone_norm,
                 "created_at": _now_dt().isoformat(),
                 "source": "whatsapp_bot",
             })
-            ctx["customer"]["contact_id"] = ctx["customer"].get("contact_id")
         await _safe_send(send_text(wa, phone, f"Got it, {ctx['customer']['name']}. Let's pick the products you need."),
-                         phone, "captured_company")
+                         phone, "captured_state")
         new_state = await _enter_material_picker(ctx)
-        return {"state": new_state, "customer_phone": phone, "actions_taken": ["captured_company"]}
+        return {"state": new_state, "customer_phone": phone, "actions_taken": ["captured_state"]}
 
     # ─── State: PICK_MATERIAL — button reply ───
     if state == ST_PICK_MATERIAL:
@@ -1076,28 +1120,27 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
                     customer=ctx.get("customer") or {},
                     source="whatsapp_bot",
                 )
-                pi_no = (result.get("proforma") or {}).get("number") or result.get("quote_number")
+                qno = result.get("quote_number") or "-"
                 grand = float(result.get("grand_total") or 0)
-                onum = result.get("order_number") or ""
                 await send_text(
                     wa, phone,
-                    f"✅ Done!\n\n*Proforma Invoice {pi_no}* generated.\n"
-                    f"Order: {onum}\n"
+                    f"✅ Done!\n\n*Quotation {qno}* generated.\n"
                     f"Total: *₹{grand:,.2f}* _(GST included)_\n\n"
-                    "PDF is on its way to your WhatsApp + email.\n"
-                    "Track your order anytime at hrexporter.com/my-quotes.\n\n"
+                    "Quote PDF is on its way to your WhatsApp + email.\n"
+                    "Our team will review and approve it shortly. Once approved you'll be able to upload your PO from hrexporter.com/my-quotes.\n\n"
                     "Type 'menu' to start a new request."
                 )
                 await _save_session(db, phone_norm, ST_FINALIZED,
-                                    {"quote_id": result.get("quote_id"), "order_id": result.get("order_id"),
-                                     "proforma_number": pi_no},
-                                    {"in": text, "at": _now_dt().isoformat(), "out": f"proforma:{pi_no}"})
-                return {"state": ST_FINALIZED, "customer_phone": phone, "quote_id": result.get("quote_id"),
-                        "order_id": result.get("order_id"), "actions_taken": ["finalized"]}
+                                    {"quote_id": result.get("quote_id"),
+                                     "quote_number": qno},
+                                    {"in": text, "at": _now_dt().isoformat(), "out": f"quote:{qno}"})
+                return {"state": ST_FINALIZED, "customer_phone": phone,
+                        "quote_id": result.get("quote_id"),
+                        "actions_taken": ["finalized"]}
             except Exception as e:
-                logger.exception("[bot] failed to finalize → proforma")
+                logger.exception("[bot] failed to finalize → quote")
                 await _safe_send(send_text(wa, phone,
-                                "Sorry, I hit a snag generating your Proforma Invoice. Our team has been notified and will reach out shortly."),
+                                "Sorry, I hit a snag generating your Quotation. Our team has been notified and will reach out shortly."),
                                  phone, "finalize_failed")
                 return {"state": ST_REVIEW_CART, "customer_phone": phone, "actions_taken": ["finalize_failed"], "error": str(e)}
         elif "remove" in choice or sel == "2":

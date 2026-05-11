@@ -32,6 +32,56 @@ export default function RequestQuote() {
 
   useEffect(() => { setCart(readCart()); }, []);
 
+  // Auto-skip the "enter details" form for already-logged-in customers.
+  // If a valid public session token is in localStorage, pull the contact's
+  // profile and jump straight to step 3 (review with prices).
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await api.get(`/public/me?token=${token}`);
+        if (cancelled || !data?.contact) return;
+        setDetails({
+          name: data.contact.name || "",
+          company: data.contact.company || "",
+          phone: data.contact.phone || "",
+          email: data.contact.email || "",
+          gst_number: data.contact.gst_number || "",
+          state: data.contact.state || "",
+          billing_address: data.contact.billing_address || "",
+          shipping_address: data.contact.shipping_address || "",
+        });
+        const items = readCart();
+        if (!items.length) return; // nothing to price yet — stay on step 1
+        const r = await api.get(`/public/variants?token=${token}`);
+        const map = {};
+        r.data.forEach((v) => { map[v.id] = v; });
+        const priced = items.map((c) => {
+          const v = map[c.product_variant_id];
+          return {
+            ...c,
+            base_price: Number(v?.final_price || 0),
+            gst_percentage: Number(v?.gst_percentage || 18),
+            unit: v?.unit || "NOS",
+          };
+        });
+        if (cancelled) return;
+        setPricedItems(priced);
+        setRequestId(tokenRequestId || null);
+        setStep(3);
+      } catch {
+        // Token invalid/expired — fall back to step 1 (manual details + OTP)
+        localStorage.removeItem("hre_public_token");
+        localStorage.removeItem("hre_public_request_id");
+        setToken("");
+        setTokenRequestId("");
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const updateQty = (vid, qty) => {
     const next = cart.map((c) => c.product_variant_id === vid ? { ...c, quantity: Number(qty) } : c);
     setCart(next); writeCart(next);
@@ -90,10 +140,14 @@ export default function RequestQuote() {
   const finalise = async () => {
     setBusy(true);
     try {
-      const { data } = await api.post(
-        `/public/quote-requests/${requestId}/finalise?token=${token}`,
-        { items: pricedItems.map((p) => ({ product_variant_id: p.product_variant_id, quantity: Number(p.quantity || 0) })), notes: "" },
-      );
+      // If the customer is already logged in (token present but no fresh
+      // requestId from this session) use the streamlined /public/me/quote/create
+      // endpoint so they don't have to re-OTP for every quote.
+      const items = pricedItems.map((p) => ({ product_variant_id: p.product_variant_id, quantity: Number(p.quantity || 0) }));
+      const url = (token && !requestId)
+        ? `/public/me/quote/create?token=${token}`
+        : `/public/quote-requests/${requestId}/finalise?token=${token}`;
+      const { data } = await api.post(url, { items, notes: "" });
       setSavedQuote(data);
       writeCart([]);
       setCart([]);
@@ -156,11 +210,11 @@ export default function RequestQuote() {
             </div>
             <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
               <Input label="Name *" required value={details.name} onChange={(v) => setDetails({ ...details, name: v })} testId="public-name" />
-              <Input label="Company" value={details.company} onChange={(v) => setDetails({ ...details, company: v })} />
+              <Input label="Company *" required value={details.company} onChange={(v) => setDetails({ ...details, company: v })} testId="public-company" />
               <Input label="Phone *" required value={details.phone} onChange={(v) => setDetails({ ...details, phone: v })} placeholder="+91 98xxx xxxxx" testId="public-phone" />
               <Input label="Email *" required type="email" value={details.email} onChange={(v) => setDetails({ ...details, email: v })} testId="public-email" placeholder="you@company.com" />
               <Input label="GST Number" value={details.gst_number} onChange={(v) => setDetails({ ...details, gst_number: v })} />
-              <Input label="State" value={details.state} onChange={(v) => setDetails({ ...details, state: v })} placeholder="Maharashtra" />
+              <Input label="State *" required value={details.state} onChange={(v) => setDetails({ ...details, state: v })} placeholder="Gujarat / Maharashtra / …" testId="public-state" />
               <TextArea label="Billing Address" span value={details.billing_address} onChange={(v) => setDetails({ ...details, billing_address: v })} />
               <TextArea label="Shipping Address" span value={details.shipping_address} onChange={(v) => setDetails({ ...details, shipping_address: v })} />
             </div>

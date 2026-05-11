@@ -50,9 +50,8 @@ async def create_order_from_quote(
         raise HTTPException(status_code=404, detail="Quote not found")
     if quote.get("status") not in ("approved", "sent"):
         raise HTTPException(status_code=400, detail="Quote must be approved (or at least sent) before converting to order")
-    existing = await db.orders.find_one({"quote_id": qid}, {"_id": 0, "id": 1, "order_number": 1})
-    if existing:
-        raise HTTPException(status_code=409, detail=f"Order {existing['order_number']} already exists for this quote")
+    # Per business rule (2026-05-11): multiple orders may be created from the
+    # same quote — each gets its own sequential HRE/ORD/... number.
     po_number = (data or {}).get("po_number", "") if data else ""
     order = mint_order_from_quote(quote, user["email"], po_number=po_number)
     order["order_number"] = await next_order_number()
