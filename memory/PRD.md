@@ -392,3 +392,12 @@ Per user request matching the supplied taxinvoice (1).pdf reference:
 - New helper test: `merge_pdfs_for_dispatch` smoke-checked with 2 dummy 1-page PDFs → 2-page bundle.
 - `pypdf==6.11.0` added to `requirements.txt`.
 - All 59 dispatch + bot + iter-7 tests pass.
+
+
+
+## Hot Leads Widget + Seed Demo Data + UI Cleanup — 2026-05-11
+- **P1 Hot Leads dashboard widget**: New `GET /api/dashboard/hot-leads` returns every non-archived `sent`/`draft` quote whose `dispatch_log` has at least one entry with `status=="read"`. Excludes approved/rejected/revised quotes. Sorted by read_at desc, capped at 25. Frontend (`Dashboard.jsx`) renders a new Hot Leads table (Quote # / Customer / Value / Read / Channel) directly under the stat cards.
+- **P3 Seed Demo Data**: New admin-only `POST /api/dashboard/seed-demo-data` creates 3 sample contacts (Demo · Rajesh Kumar / Priya Sharma / Anil Singh) + 1 sample quote pre-seeded with a `status=="read"` email dispatch_log entry so it shows up immediately in Hot Leads. Idempotent on contacts (matched by `phone_norm`), always creates a fresh quote.
+- **UI**: Removed stale "Default admin: admin@hrexporter.com / Admin@123" hint from `Login.jsx` (was still in the file despite the prior handoff claiming it was removed). Removed "Coming Soon" section + WhatsApp Bot / Expo Leads stub rows from admin sidebar (`Sidebar.jsx`) — those modules now live in the main CRM menu. Removed "Admin" sign-in link from the public catalogue header (`PublicLayout.jsx`). Bumped the public header logo from `h-9 sm:h-12` to `h-16 sm:h-20` and applied negative vertical margins (`-my-3 sm:-my-4`) so the logo grows visually without enlarging the header bar.
+- **Test**: Backend curl verified — `/api/dashboard/hot-leads` returns 3 pre-existing read quotes from Harsh Gujarati + the freshly-seeded demo quote.
+- New tests authored at `/app/backend/tests/test_iteration8_hot_leads_seed.py` (11 cases: auth gates, response shape, status filters, idempotency, admin role gate). Run with `pytest /app/backend/tests/test_iteration8_hot_leads_seed.py -v`.

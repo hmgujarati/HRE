@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation, Outlet } from "react-router-dom";
-import { ShoppingCart, ListBullets, FileText, SignIn, List, X } from "@phosphor-icons/react";
+import { ShoppingCart, ListBullets, FileText, List, X } from "@phosphor-icons/react";
 
 const NAV = [
   { to: "/catalogue", label: "Catalogue", icon: ListBullets, testId: "public-nav-catalogue" },
@@ -17,8 +17,8 @@ export default function PublicLayout() {
     <div className="min-h-screen bg-white industrial flex flex-col">
       <header className="border-b border-zinc-200 bg-white sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
-          <Link to="/catalogue" className="flex items-center gap-3" onClick={() => setOpen(false)}>
-            <img src="/hre-logo-light-bg.png" alt="H R Exporter" className="h-9 sm:h-12 object-contain" />
+          <Link to="/catalogue" className="flex items-center gap-3 -my-3 sm:-my-4" onClick={() => setOpen(false)}>
+            <img src="/hre-logo-light-bg.png" alt="H R Exporter" className="h-16 sm:h-20 object-contain" />
           </Link>
           {/* Desktop nav */}
           <nav className="hidden md:flex items-center gap-6 text-sm font-bold uppercase tracking-wider">
@@ -31,9 +31,6 @@ export default function PublicLayout() {
                 </Link>
               );
             })}
-            <Link to="/login" className="text-[10px] uppercase tracking-wider font-bold text-zinc-500 hover:text-[#FBAE17] flex items-center gap-1" data-testid="public-nav-admin">
-              <SignIn size={12} /> Admin
-            </Link>
           </nav>
           {/* Mobile burger */}
           <button onClick={() => setOpen((s) => !s)} className="md:hidden text-zinc-700" data-testid="public-nav-toggle">
@@ -52,9 +49,6 @@ export default function PublicLayout() {
                 </Link>
               );
             })}
-            <Link to="/login" onClick={() => setOpen(false)} className="px-5 py-3 text-xs uppercase tracking-wider font-bold text-zinc-500 flex items-center gap-2">
-              <SignIn size={14} /> Admin
-            </Link>
           </nav>
         )}
       </header>
