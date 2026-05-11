@@ -295,3 +295,94 @@ def test_pick_family_sends_product_and_dimension_images():
         await db.chatbot_sessions.delete_one({"phone_norm": phone_norm})
 
     _run(go())
+
+def test_remove_from_cart_flow():
+    """REVIEW_CART → Remove item → list reply → item removed → cart re-rendered."""
+    importlib.reload(wb)
+    db = _db()
+    captured = []
+
+    async def fake_post(_wa, path, payload):
+        captured.append((path, payload))
+        return {"data": {"wamid": f"fake-{len(captured)}"}}
+
+    async def go():
+        phone = "+919111222333"
+        phone_norm = "919111222333"
+        await db.chatbot_sessions.delete_many({"phone_norm": phone_norm})
+        # Plant a session at REVIEW_CART with 2 line items.
+        ctx = {
+            "customer": {"name": "T", "email": "t@t.com", "company": "T", "phone": phone},
+            "line_items": [
+                {"variant_id": "v-aaa", "variant_code": "RI-1", "variant_name": "RI-1",
+                 "unit_price": 10.0, "qty": 5},
+                {"variant_id": "v-bbb", "variant_code": "RI-2", "variant_name": "RI-2",
+                 "unit_price": 20.0, "qty": 3},
+            ],
+        }
+        await db.chatbot_sessions.update_one(
+            {"phone_norm": phone_norm},
+            {"$set": {"phone_norm": phone_norm, "state": wb.ST_REVIEW_CART,
+                      "ctx": ctx, "last_msg_at": wb._now_dt().isoformat()}},
+            upsert=True,
+        )
+
+        # Step 1: tap "Remove item" (sel="2")
+        with patch.object(wb, "_bizchat_post", new=fake_post):
+            r = await wb.dispatch(
+                db=db, wa=WA, sm={}, settings_doc={},
+                msg={"phone": phone, "phone_norm": phone_norm,
+                     "text": "Remove item", "selection_id": "2", "wamid": "in-rm-1"},
+                builder_fn=None,
+            )
+        assert r["state"] == wb.ST_REMOVE_ITEM, r
+        # The bot should have sent a list of cart items with `rm:<idx>` row ids
+        list_msg = next((p for path, p in reversed(captured)
+                         if path == "send-interactive-message"
+                         and p.get("interactive_type") == "list"), None)
+        assert list_msg, "no remove-item list captured"
+        rows = list_msg["list_data"]["sections"]["section_1"]["rows"]
+        row_ids = [r["id"] for r in rows.values()]
+        assert "rm:0" in row_ids and "rm:1" in row_ids
+
+        # Step 2: tap item at index 0 (RI-1) for removal
+        captured.clear()
+        with patch.object(wb, "_bizchat_post", new=fake_post):
+            r = await wb.dispatch(
+                db=db, wa=WA, sm={}, settings_doc={},
+                msg={"phone": phone, "phone_norm": phone_norm,
+                     "text": "1. RI-1", "selection_id": "rm:0", "wamid": "in-rm-2"},
+                builder_fn=None,
+            )
+        assert r["state"] == wb.ST_REVIEW_CART, r
+        assert "removed_item" in r["actions_taken"]
+        # Session ctx should now have only 1 line item, and it should be RI-2
+        sess = await db.chatbot_sessions.find_one({"phone_norm": phone_norm}, {"_id": 0})
+        assert len(sess["ctx"]["line_items"]) == 1
+        assert sess["ctx"]["line_items"][0]["variant_code"] == "RI-2"
+
+        # Step 3: remove the LAST item → cart becomes empty → AFTER_ITEM with "Add another / Cancel"
+        captured.clear()
+        with patch.object(wb, "_bizchat_post", new=fake_post):
+            # Open remove list again
+            await wb.dispatch(
+                db=db, wa=WA, sm={}, settings_doc={},
+                msg={"phone": phone, "phone_norm": phone_norm,
+                     "text": "Remove item", "selection_id": "2", "wamid": "in-rm-3"},
+                builder_fn=None,
+            )
+            r = await wb.dispatch(
+                db=db, wa=WA, sm={}, settings_doc={},
+                msg={"phone": phone, "phone_norm": phone_norm,
+                     "text": "1. RI-2", "selection_id": "rm:0", "wamid": "in-rm-4"},
+                builder_fn=None,
+            )
+        assert r["state"] == wb.ST_AFTER_ITEM, r
+        assert "removed_last_item" in r["actions_taken"]
+        sess = await db.chatbot_sessions.find_one({"phone_norm": phone_norm}, {"_id": 0})
+        assert sess["ctx"]["line_items"] == []
+
+        await db.chatbot_sessions.delete_one({"phone_norm": phone_norm})
+
+    _run(go())
+

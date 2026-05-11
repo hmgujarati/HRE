@@ -299,6 +299,14 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 ## Backlog (post-refactor)
 - P1: Hot Leads dashboard widget (quotes Read but not acted on)
 - P2: Customer PO acknowledgement (auto WA/Email reply when customer uploads a PO)
+
+## WhatsApp Chatbot — Remove from Cart (2026-05-10)
+- In **Review Cart** the customer can now tap **Remove item** (3rd button alongside Confirm & Send / Cancel).
+- This opens a WhatsApp list of cart items (`title: "1. RI-1234"`, `description: "× 5 = ₹50.00"`); tapping a row deletes that line item.
+- After removal: cart is re-rendered. If the cart becomes empty, the bot drops the customer back to "Add another / Cancel" instead of leaving them stranded on an empty Review screen.
+- New state `ST_REMOVE_ITEM`, new helpers `_send_review_cart` + `_send_remove_item_list`.
+- Test: `test_remove_from_cart_flow` covers the full remove → re-render → empty-cart path. 7/7 WA bot tests pass.
+
 - P2: Public `/track/{order#}` deep-link
 - P2: Customer 360 side-panel endpoint (contact + last 5 quotes + last 3 orders + WA engagement in one call)
 - P3: Brute-force lockout in routers/auth.py (5 failed → 15-min cooldown)

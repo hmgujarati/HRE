@@ -4,7 +4,9 @@ Flow:
   WELCOME → ASK_NAME → ASK_EMAIL → ASK_COMPANY → PICK_MATERIAL → PICK_FAMILY
         → ASK_CABLE → ASK_HOLE → PICK_VARIANT → ASK_QTY → AFTER_ITEM
         (Add another → loop back to PICK_MATERIAL)
-        (Review cart → REVIEW_CART → confirm → FINALIZED)
+        (Review cart → REVIEW_CART → Confirm → FINALIZED)
+        (REVIEW_CART → Remove item → REMOVE_ITEM → back to REVIEW_CART /
+         or AFTER_ITEM if cart becomes empty)
 
 Wired into server.py via:
   - `/api/webhooks/bizchat/inbound` and `/api/webhooks/bizchat/status` (consolidated)
@@ -57,6 +59,7 @@ ST_PICK_VARIANT = "pick_variant"
 ST_ASK_QTY = "ask_qty"
 ST_AFTER_ITEM = "after_item"
 ST_REVIEW_CART = "review_cart"
+ST_REMOVE_ITEM = "remove_item"
 ST_FINALIZED = "finalized"
 ST_HUMAN_HANDOFF = "human_handoff"
 
@@ -678,6 +681,49 @@ def _cart_summary_text(line_items: List[dict]) -> str:
     return "\n".join(lines)
 
 
+async def _send_review_cart(wa: dict, phone: str, line_items: List[dict]):
+    """Render the cart review screen with Confirm / Remove / Cancel buttons."""
+    summary = _cart_summary_text(line_items or [])
+    has_items = bool(line_items)
+    buttons = (["Confirm & Send", "Remove item", "Cancel"]
+               if has_items else ["Add another", "Cancel", ""])
+    buttons = [b for b in buttons if b]
+    body = (f"*Review your cart:*\n\n{summary}\n\n"
+            + ("Ready to receive your Proforma Invoice?" if has_items
+               else "Your cart is empty — type 'menu' to start over."))
+    await _safe_send(send_buttons(
+        wa, phone, body_text=body, buttons=buttons, header_text="Cart Review",
+    ), phone, "review_cart")
+
+
+async def _send_remove_item_list(wa: dict, phone: str, line_items: List[dict]) -> bool:
+    """Show each cart item as a list row so the customer can tap one to remove."""
+    if not line_items:
+        await _safe_send(send_text(wa, phone, "Your cart is empty. Type 'menu' to start over."),
+                         phone, "remove_empty_cart")
+        return False
+    rows = []
+    for i, li in enumerate(line_items[:10]):  # WA hard limit: 10 rows
+        nm = li.get("variant_name") or li.get("variant_code") or "Item"
+        qty = int(li.get("qty", 0))
+        unit = float(li.get("unit_price", 0))
+        lt = unit * qty
+        rows.append({
+            "id": f"rm:{i}",
+            "title": f"{i+1}. {nm}"[:24],
+            "description": f"× {qty} = ₹{lt:,.2f}"[:72],
+        })
+    await _safe_send(send_list(
+        wa, phone,
+        body_text="Which item should I remove?",
+        button_text="Pick item",
+        sections=[{"title": "Cart items", "id": "cart_items", "rows": rows}],
+        header_text="Remove Item",
+        footer_text="Tap an item to delete it.",
+    ), phone, "remove_item_list")
+    return True
+
+
 # ─────────────────────── Main dispatcher ───────────────────────
 
 async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str, Any], builder_fn) -> Dict[str, Any]:
@@ -998,13 +1044,7 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
             new_state = await _enter_material_picker(ctx)
             return {"state": new_state, "customer_phone": phone, "actions_taken": ["add_more"]}
         elif "review" in choice or sel == "2":
-            summary = _cart_summary_text(ctx.get("line_items") or [])
-            await _safe_send(send_buttons(
-                wa, phone,
-                body_text=f"*Review your cart:*\n\n{summary}\n\nReady to receive your Proforma Invoice?",
-                buttons=["Confirm & Send", "Cancel"],
-                header_text="Cart Review",
-            ), phone, "review_cart")
+            await _send_review_cart(wa, phone, ctx.get("line_items") or [])
             await _save_session(db, phone_norm, ST_REVIEW_CART, ctx,
                                 {"in": text, "at": _now_dt().isoformat(), "out": "review_cart"})
             return {"state": ST_REVIEW_CART, "customer_phone": phone, "actions_taken": ["review_cart"]}
@@ -1021,7 +1061,7 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
             ), phone, "after_item_repeat")
             return {"state": ST_AFTER_ITEM, "customer_phone": phone, "actions_taken": ["expecting_addmore"]}
 
-    # ─── State: REVIEW_CART — Confirm / Cancel ───
+    # ─── State: REVIEW_CART — Confirm / Remove / Cancel ───
     if state == ST_REVIEW_CART:
         choice = text_lower
         if "confirm" in choice or "send" in choice or sel == "1":
@@ -1060,7 +1100,15 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
                                 "Sorry, I hit a snag generating your Proforma Invoice. Our team has been notified and will reach out shortly."),
                                  phone, "finalize_failed")
                 return {"state": ST_REVIEW_CART, "customer_phone": phone, "actions_taken": ["finalize_failed"], "error": str(e)}
-        elif "cancel" in choice or sel == "2":
+        elif "remove" in choice or sel == "2":
+            ok = await _send_remove_item_list(wa, phone, ctx.get("line_items") or [])
+            if not ok:
+                await db.chatbot_sessions.delete_one({"phone_norm": phone_norm})
+                return {"state": "cancelled", "customer_phone": phone, "actions_taken": ["empty_cart_on_remove"]}
+            await _save_session(db, phone_norm, ST_REMOVE_ITEM, ctx,
+                                {"in": text, "at": _now_dt().isoformat(), "out": "remove_item_list"})
+            return {"state": ST_REMOVE_ITEM, "customer_phone": phone, "actions_taken": ["remove_item_prompt"]}
+        elif "cancel" in choice or sel == "3":
             await _safe_send(send_text(wa, phone, "Order cancelled. Type 'menu' anytime to start over."),
                              phone, "cancelled")
             await db.chatbot_sessions.delete_one({"phone_norm": phone_norm})
@@ -1069,9 +1117,45 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
             await _safe_send(send_buttons(
                 wa, phone,
                 body_text="Please pick one:",
-                buttons=["Confirm & Send", "Cancel"],
+                buttons=["Confirm & Send", "Remove item", "Cancel"],
             ), phone, "review_repeat")
             return {"state": ST_REVIEW_CART, "customer_phone": phone, "actions_taken": ["expecting_confirm"]}
+
+    # ─── State: REMOVE_ITEM — list reply with id "rm:<idx>" ───
+    if state == ST_REMOVE_ITEM:
+        line_items = ctx.get("line_items") or []
+        idx: Optional[int] = None
+        if sel.startswith("rm:"):
+            try:
+                idx = int(sel[3:])
+            except ValueError:
+                idx = None
+        if idx is None or not (0 <= idx < len(line_items)):
+            await _safe_send(send_text(wa, phone,
+                            "I didn't catch that. Please tap one of the items from the list above (or type 'menu' to start over)."),
+                             phone, "remove_bad_selection")
+            return {"state": ST_REMOVE_ITEM, "customer_phone": phone, "actions_taken": ["remove_bad_selection"]}
+        removed = line_items.pop(idx)
+        ctx["line_items"] = line_items
+        removed_label = removed.get("variant_name") or removed.get("variant_code") or "Item"
+        await _safe_send(send_text(wa, phone,
+                        f"🗑 Removed *{removed_label}* from your cart."),
+                         phone, "removed_item")
+        # Re-render the cart (or go back to add-flow if empty)
+        if line_items:
+            await _send_review_cart(wa, phone, line_items)
+            await _save_session(db, phone_norm, ST_REVIEW_CART, ctx,
+                                {"in": text, "at": _now_dt().isoformat(), "out": "review_cart"})
+            return {"state": ST_REVIEW_CART, "customer_phone": phone, "actions_taken": ["removed_item"]}
+        else:
+            await _safe_send(send_buttons(
+                wa, phone,
+                body_text="Your cart is now *empty*. Add another item or cancel?",
+                buttons=["Add another", "Cancel"],
+            ), phone, "cart_empty_after_remove")
+            await _save_session(db, phone_norm, ST_AFTER_ITEM, ctx,
+                                {"in": text, "at": _now_dt().isoformat(), "out": "after_item"})
+            return {"state": ST_AFTER_ITEM, "customer_phone": phone, "actions_taken": ["removed_last_item"]}
 
     if state == ST_HUMAN_HANDOFF or state == ST_FINALIZED:
         # Restart flow on next message
