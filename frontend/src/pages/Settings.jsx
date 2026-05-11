@@ -530,9 +530,9 @@ function BrandingTab() {
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       <div className="border border-zinc-200 bg-white p-6">
         <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">Branding</div>
-        <h3 className="font-heading font-black text-lg mb-4">HREXPORTER</h3>
+        <h3 className="font-heading font-black text-lg mb-4">H R Exporter</h3>
         <div className="border border-zinc-200 bg-zinc-50 p-4 mb-4 flex items-center justify-center">
-          <img src="/hre-logo-light-bg.png" alt="HREXPORTER" className="h-20 object-contain" />
+          <img src="/hre-logo-light-bg.png" alt="H R Exporter" className="h-20 object-contain" />
         </div>
         <div className="grid grid-cols-3 gap-3 text-xs">
           <div><div className="h-12 bg-[#FBAE17]" /><div className="font-mono mt-1">#FBAE17</div></div>

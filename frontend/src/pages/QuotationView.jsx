@@ -8,9 +8,9 @@ import QuoteStatusBadge from "@/components/QuoteStatusBadge";
 import { DeliveryPill, latestByChannel } from "@/components/DeliveryPill";
 import { numberToWordsINR } from "@/lib/numberToWords";
 
-// Seller details (HREXPORTER) — to become editable in Settings later
+// Seller details (H R Exporter) — to become editable in Settings later
 const SELLER = {
-  name: "HREXPORTER",
+  name: "H R Exporter",
   address: "BLOCK NO 201, BHATGAM ROAD, BHATGAM, OLPAD, SURAT, 394540",
   phones: "+91 9033135768, +91 8980004416 (Guj. Ind)",
   email: "info@hrexporter.com",
@@ -240,7 +240,7 @@ export default function QuotationView() {
                 <div className="text-[11px] leading-tight">E-mail :- {SELLER.email}</div>
               </div>
               <div className="col-span-4 flex items-center justify-end">
-                <img src="/hre-logo-light-bg.png" alt="HREXPORTER" className="h-20 object-contain" />
+                <img src="/hre-logo-light-bg.png" alt="H R Exporter" className="h-28 object-contain max-w-[260px]" />
               </div>
             </div>
             <div className="border-t border-black grid grid-cols-2 text-[11px] font-bold">

@@ -43,7 +43,7 @@ export default function Login() {
           backgroundSize: '32px 32px',
         }} />
         <div className="relative z-10">
-          <img src="/hre-logo-dark-bg.png" alt="HREXPORTER · An ISO 9001 Company" className="h-44 w-auto object-contain -ml-3" data-testid="login-logo-large" />
+          <img src="/hre-logo-dark-bg.png" alt="H R Exporter · An ISO 9001 Company" className="h-44 w-auto object-contain -ml-3" data-testid="login-logo-large" />
         </div>
 
         <div className="relative z-10 mt-auto">
@@ -79,7 +79,7 @@ export default function Login() {
       <div className="flex items-center justify-center p-8">
         <form onSubmit={submit} className="w-full max-w-md" data-testid="login-form">
           <div className="lg:hidden mb-10">
-            <img src="/hre-logo-light-bg.png" alt="HREXPORTER" className="h-14 object-contain" />
+            <img src="/hre-logo-light-bg.png" alt="H R Exporter" className="h-14 object-contain" />
           </div>
 
           <div className="text-[10px] uppercase tracking-[0.22em] text-[#FBAE17] font-bold mb-3">Sign in</div>

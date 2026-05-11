@@ -70,7 +70,7 @@ def number_to_words_inr(amount: float) -> str:
 
 
 SELLER = {
-    "name": "HREXPORTER",
+    "name": "H R Exporter",
     "address": "BLOCK NO 201, BHATGAM ROAD, BHATGAM, OLPAD, SURAT, 394540",
     "phones": "+91 9033135768, +91 8980004416 (Guj. Ind)",
     "email": "info@hrexporter.com",
@@ -116,7 +116,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .header .top { display: table; width: 100%; padding: 10px 12px; }
   .header .top .l { display: table-cell; width: 62%; vertical-align: middle; }
   .header .top .r { display: table-cell; width: 38%; vertical-align: middle; text-align: right; }
-  .header .top img { height: 64px; }
+  .header .top img { height: 96px; max-width: 240px; object-fit: contain; }
   .header .gstline { display: table; width: 100%; border-top: 1px solid #000; font-weight: 700; }
   .header .gstline > div { display: table-cell; padding: 3px 10px; }
   .header .gstline .l { border-right: 1px solid #000; }
@@ -173,7 +173,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
         <div>Ph. {{ seller.phones }}</div>
         <div>E-mail :- {{ seller.email }}</div>
       </div>
-      <div class="r">{% if logo_url %}<img src="{{ logo_url }}" alt="HREXPORTER">{% else %}<div class="bold" style="font-size:22px;letter-spacing:2px;">HREXPORTER</div>{% endif %}</div>
+      <div class="r">{% if logo_url %}<img src="{{ logo_url }}" alt="H R Exporter">{% else %}<div class="bold" style="font-size:22px;letter-spacing:2px;">H R Exporter</div>{% endif %}</div>
     </div>
     <div class="gstline">
       <div class="l">GSTIN No. {{ seller.gstin }}</div>

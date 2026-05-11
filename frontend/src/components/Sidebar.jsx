@@ -30,8 +30,8 @@ export default function Sidebar() {
   return (
     <aside className="sidebar-dark fixed left-0 top-0 h-screen w-64 bg-[#1A1A1A] text-white flex flex-col border-r border-zinc-900 z-40" data-testid="sidebar">
       {/* Brand */}
-      <div className="px-6 py-6 border-b border-zinc-800 flex items-center justify-center">
-        <img src="/hre-logo-dark-bg.png" alt="HREXPORTER · An ISO 9001 Company" className="h-16 object-contain" data-testid="sidebar-logo" />
+      <div className="px-4 py-4 border-b border-zinc-800 flex items-center justify-center">
+        <img src="/hre-logo-dark-bg.png" alt="H R Exporter · An ISO 9001 Company" className="h-28 max-w-full object-contain" data-testid="sidebar-logo" />
       </div>
 
       {/* Nav */}

@@ -18,7 +18,7 @@ export default function PublicLayout() {
       <header className="border-b border-zinc-200 bg-white sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
           <Link to="/catalogue" className="flex items-center gap-3" onClick={() => setOpen(false)}>
-            <img src="/hre-logo-light-bg.png" alt="HREXPORTER" className="h-9 sm:h-12 object-contain" />
+            <img src="/hre-logo-light-bg.png" alt="H R Exporter" className="h-9 sm:h-12 object-contain" />
           </Link>
           {/* Desktop nav */}
           <nav className="hidden md:flex items-center gap-6 text-sm font-bold uppercase tracking-wider">
@@ -63,7 +63,7 @@ export default function PublicLayout() {
       </main>
       <footer className="border-t border-zinc-200 bg-[#1A1A1A] text-zinc-400 text-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
-          <div>© HREXPORTER · An ISO 9001 Company</div>
+          <div>© H R Exporter · An ISO 9001 Company</div>
           <div className="font-mono">+91 9033135768 · info@hrexporter.com</div>
         </div>
       </footer>
