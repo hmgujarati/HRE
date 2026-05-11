@@ -282,13 +282,17 @@ async def dispatch_finalised_quote(quote: dict) -> dict:
             try:
                 customer_name = contact_name or contact_company or "Customer"
                 grand_inr = float(quote.get("grand_total") or 0)
-                grand_str = f"Total: ₹{grand_inr:,.2f}"
+                # The BizChat WhatsApp template already carries the labels
+                # ("Total Amount: {{3}}", "Quotation Valid Till: {{4}}"), so we
+                # send bare values — otherwise the labels appear twice in the
+                # delivered message (bug: 2026-05-11).
+                grand_str = f"₹{grand_inr:,.2f}"
                 line_count = len(quote.get("line_items") or [])
                 valid_iso = (quote.get("valid_until") or "").strip()
                 if valid_iso:
                     try:
                         d = datetime.fromisoformat(valid_iso)
-                        valid_str = f"Valid till {d.strftime('%d-%m-%Y')} · {line_count} item{'s' if line_count != 1 else ''}"
+                        valid_str = f"{d.strftime('%d-%m-%Y')} · {line_count} item{'s' if line_count != 1 else ''}"
                     except Exception:
                         valid_str = f"{line_count} item{'s' if line_count != 1 else ''} · validity 30 days"
                 else:
