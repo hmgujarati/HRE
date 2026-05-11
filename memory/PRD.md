@@ -309,6 +309,13 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 
 - P2: Public `/track/{order#}` deep-link
 - P2: Customer 360 side-panel endpoint (contact + last 5 quotes + last 3 orders + WA engagement in one call)
+
+## Bug fix — `/api/quotations/{qid}/convert-to-order` ImportError (2026-05-11)
+- The orders refactor (2026-05-10) moved `create_order_from_quote` to `routers/orders.py`, but `routers/quotations.py` still had a stale `from server import create_order_from_quote` shim. Every call from the frontend Quotation detail page ("Convert to Order" with PO number) crashed with 500 / `ImportError: cannot import name 'create_order_from_quote' from 'server'`.
+- Fix: changed the late-import to `from routers.orders import create_order_from_quote`.
+- Regression test added: `TestOrders::test_convert_to_order_alias_works` — hits the alias endpoint after a successful conversion and asserts a 409 (not 500), proving the route+dispatch wiring works.
+- Verified by curl against preview URL: PO `TEST-PO-FIX-001` persisted, order `HRE/ORD/2026-27/0009` created, stage `pending_po`.
+
 - P3: Brute-force lockout in routers/auth.py (5 failed → 15-min cooldown)
 - P3: `/api/health/integrations` endpoint (pings BizChat + Hostinger SMTP)
 - P3: "Copy / Share to WhatsApp" buttons on Variants UI

@@ -280,6 +280,26 @@ class TestOrders:
         r = admin_client.post(f"{BASE_URL}/api/orders/from-quote/{qid}", json={})
         assert r.status_code == 409, r.text
 
+    def test_convert_to_order_alias_works(self, admin_client):
+        """REGRESSION: `POST /api/quotations/{qid}/convert-to-order` is the
+        endpoint the frontend Quotation detail page uses. After the orders
+        refactor (2026-05-10) this alias was broken by a stale
+        `from server import create_order_from_quote` — guard against
+        that recurring. We hit the alias on the SAME quote that's already been
+        converted, so we expect a 409 — proving the route resolves and
+        delegates correctly to the new routers/orders.py handler instead of
+        crashing with a 500 ImportError."""
+        qid = STATE["quote_id"]
+        r = admin_client.post(
+            f"{BASE_URL}/api/quotations/{qid}/convert-to-order",
+            json={"po_number": "TEST_PO_001"},
+        )
+        # 409 means the route + dispatch wiring works (a 500 would mean ImportError)
+        assert r.status_code == 409, r.text
+        body = r.json()
+        # FastAPI error envelope; the 'already exists' guard from orders.py
+        assert "already exists" in (body.get("detail") or "").lower()
+
     def test_list_orders(self, admin_client):
         r = admin_client.get(f"{BASE_URL}/api/orders")
         assert r.status_code == 200, r.text

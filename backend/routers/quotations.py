@@ -308,8 +308,7 @@ async def quote_convert_to_order(
     data: Optional[Dict[str, Any]] = None,
     user: dict = Depends(require_role("admin", "manager")),
 ):
-    """Convenience alias used by the Quotation detail page. Late-imports the
-    order minting flow from server.py to avoid circular dependency until orders
-    is extracted in Phase C Tier 2 (orders)."""
-    from server import create_order_from_quote
+    """Convenience alias used by the Quotation detail page — delegates to the
+    canonical order-minting handler now in routers/orders.py."""
+    from routers.orders import create_order_from_quote
     return await create_order_from_quote(qid, data, user)
