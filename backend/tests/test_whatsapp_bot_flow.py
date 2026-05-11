@@ -25,7 +25,7 @@ import server as srv  # noqa: E402
 
 
 PHONE = "+918888777666"
-PHONE_NORM = "918888777666"
+PHONE_NORM = "8888777666"
 
 WA = {
     "api_base_url": "https://x", "vendor_uid": "v", "token": "t",
@@ -82,7 +82,8 @@ def test_parse_inbound_real_bizchat_list_reply():
     }
     r = wb.parse_inbound(payload)
     assert r["selection_id"] == "fam:2c0d529d", r
-    assert r["phone_norm"] == "918200663263"
+    # phone_norm uses last-10-digits (parity with services/contacts.norm_phone)
+    assert r["phone_norm"] == "8200663263"
 
     # button_reply variant
     payload2 = {

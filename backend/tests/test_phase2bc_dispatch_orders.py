@@ -432,5 +432,10 @@ class TestZCleanup:
         cid = STATE.get("contact_id")
         if not cid:
             pytest.skip("no contact to delete")
+        # Per business rule (2026-05-11), contacts with linked quotes/orders cannot
+        # be hard-deleted. The earlier tests in this class created quote+order(s)
+        # for this contact, so we expect a 409 with the guard message.
         r = admin_client.delete(f"{BASE_URL}/api/contacts/{cid}")
-        assert r.status_code in (200, 204), r.text
+        assert r.status_code == 409, r.text
+        msg = (r.json().get("detail") or "").lower()
+        assert "quote" in msg or "order" in msg

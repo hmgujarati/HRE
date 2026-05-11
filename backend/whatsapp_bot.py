@@ -71,7 +71,11 @@ def _now_dt():
 
 
 def _norm_phone_local(p: str) -> str:
-    return "".join(ch for ch in (p or "") if ch.isdigit())
+    """Mirror services/contacts.norm_phone — keep only the last 10 digits so
+    contacts created via the WA bot can be looked up by the public /my-quotes
+    OTP login (which normalises the customer-typed phone to last 10 digits).
+    Diverging here means bot-quotes are silently invisible in My Quotes."""
+    return "".join(ch for ch in (p or "") if ch.isdigit())[-10:]
 
 
 # ─────────────────────── Numeric helpers ───────────────────────

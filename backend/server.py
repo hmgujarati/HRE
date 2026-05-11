@@ -141,7 +141,10 @@ async def _bot_finalize_quote(*, line_items: List[Dict[str, Any]], customer: Dic
     if not line_items:
         raise HTTPException(status_code=400, detail="No items to quote")
     phone = customer.get("phone") or ""
-    phone_norm = "".join(ch for ch in phone if ch.isdigit())
+    # IMPORTANT: must use the same last-10-digits normalisation as the rest of
+    # the system (services/contacts.norm_phone) — else /my-quotes can't match
+    # the contact by phone after OTP login. (Bug: 2026-05-11.)
+    phone_norm = _norm_phone(phone)
     contact = await db.contacts.find_one({"phone_norm": phone_norm}, {"_id": 0})
     if not contact:
         contact = {

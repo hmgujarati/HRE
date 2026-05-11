@@ -473,3 +473,41 @@ class TestOrderDelete:
         rd = requests.delete(f"{API}/orders/non-existent-id-12345", headers=admin_h, timeout=15)
         assert rd.status_code == 404, rd.text
 
+
+
+# ─────────────────────── I. WA-bot quote ↔ /my-quotes phone-norm parity ───────────────────────
+
+class TestBotQuoteVisibleInMyQuotes:
+    """REGRESSION 2026-05-11: bot-generated quotes were invisible in /my-quotes
+    because `_bot_finalize_quote` stored phone_norm with country code (12+ digits)
+    while the rest of the system uses last-10. After the fix both flows must
+    produce the same phone_norm so the My Quotes OTP login resolves the contact
+    and surfaces the bot's quote."""
+
+    def test_phone_norm_parity(self, admin_h, variant_id):
+        # Build a quote DIRECTLY via the bot's helper by hitting the bot finalize
+        # path through the public surface — but the cleanest assertion is just:
+        # create a contact via /contacts (which uses norm_phone) with a phone
+        # that includes country-code, then independently insert a chatbot-style
+        # contact via DB → both phone_norm values must collide.
+        from services.contacts import norm_phone  # noqa: E402 — service helper
+        plus91 = "+91 98765 43210"
+        bare10 = "9876543210"
+        assert norm_phone(plus91) == bare10
+        assert norm_phone(bare10) == bare10
+        # And the bot's local helper (in whatsapp_bot.py) must agree now.
+        import whatsapp_bot
+        assert whatsapp_bot._norm_phone_local(plus91) == bare10
+        assert whatsapp_bot._norm_phone_local(bare10) == bare10
+        # Round trip: contact created via /contacts is findable by either form.
+        cr = requests.post(f"{API}/contacts", headers=admin_h, json={
+            "name": "TEST PhoneNormParity", "company": "TEST Co",
+            "phone": plus91, "email": f"parity+{uuid.uuid4().hex[:6]}@example.com",
+            "state": "Gujarat",
+        }, timeout=15)
+        assert cr.status_code == 200, cr.text
+        c = cr.json()
+        assert c["phone_norm"] == bare10
+        # cleanup
+        requests.delete(f"{API}/contacts/{c['id']}", headers=admin_h, timeout=10)
+

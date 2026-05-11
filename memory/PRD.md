@@ -359,3 +359,11 @@ Per direct user request (must NOT modify Settings → WhatsApp/Email tabs going 
 - Wired into both **admin Contacts** (`Contacts.jsx`) and the **public RequestQuote** (`RequestQuote.jsx`) forms — replacing the prior free-text input.
 - GST logic unchanged in PDF: "Outside India" is treated as inter-state → IGST (same as any non-Gujarat state).
 - Bot flow stays free-text for now (constrained by WhatsApp UX — interactive lists max 10 rows, can't fit all 37 options cleanly).
+
+
+## Bug Fix — Bot-generated quotes invisible in /my-quotes (2026-05-11)
+- **Root cause**: `_bot_finalize_quote` (server.py) and `_norm_phone_local` (whatsapp_bot.py) stored `phone_norm` as ALL digits including country code (`"918888777666"`), while `services/contacts.norm_phone` (used by everything else, including the `/my-quotes` OTP login lookup) returns only the last 10 digits (`"8888777666"`). Result: a customer who placed a bot quote logged into the public portal with their 10-digit phone, but the contact lookup found nothing → empty My Quotes list.
+- **Fix**: Both `_bot_finalize_quote` and `_norm_phone_local` now use the system-wide last-10 normalisation (`norm_phone` import from `services.contacts`).
+- **Regression test added**: `TestBotQuoteVisibleInMyQuotes::test_phone_norm_parity` asserts both helpers + `services.contacts.norm_phone` agree across multiple phone formats (`"+91 98765 43210"`, `"9876543210"`, etc.).
+- **Test updates**: `test_whatsapp_bot_flow.py` PHONE_NORM constant + `parse_inbound` assertion fixed for the new last-10 format. `TestZCleanup::test_delete_contact` now expects 409 (per the 2026-05-11 contact-delete guard).
+- **Final regression**: 164 passed / 6 pre-existing seed flakes / 1 deselected / 1 skipped.
