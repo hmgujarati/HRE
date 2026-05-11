@@ -111,7 +111,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .col { flex: 1; }
   table { width: 100%; border-collapse: collapse; }
   td, th { vertical-align: top; padding: 4px 6px; }
-  .head-title { font-weight: 700; font-size: 22px; letter-spacing: 6px; padding: 10px 0 8px; text-align: center; border-bottom: 1.5px solid #000; }
+  .head-title { font-weight: 700; font-size: 22px; letter-spacing: 6px; padding: 0 0 10px; text-align: center; }
   .header { border-bottom: 2px solid #000; }
   .header .top { display: table; width: 100%; padding: 10px 12px; }
   .header .top .l { display: table-cell; width: 62%; vertical-align: middle; }
@@ -161,10 +161,11 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .nowrap { white-space: nowrap; }
   pre.preserved { white-space: pre-line; font-family: inherit; margin: 0; }
 </style></head>
-<body><div class="quote">
+<body>
+<div class="head-title">{{ doc_title }}</div>
+<div class="quote">
 
   <div class="header">
-    <div class="head-title">{{ doc_title }}</div>
     <div class="top">
       <div class="l">
         <div class="bold" style="font-size:14px;">{{ seller.name }}</div>
