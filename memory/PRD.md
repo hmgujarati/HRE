@@ -374,3 +374,12 @@ Per direct user request (must NOT modify Settings → WhatsApp/Email tabs going 
 - **Migration ran**: re-normalised every `contact.phone_norm` to last-10, merged duplicates collapsing to the same canonical key, and re-pointed all `quotations.contact_id` + `orders.contact_id` to the surviving canonical contact. For Harsh: 1 duplicate merged, 1 quote re-pointed. Now all 3 quotes appear under one contact.
 - **Hardening**: `/api/public/my-quotes` and `/api/public/quote/{qid}` now query `phone_norm ∈ {pn, "91" + pn}` so legacy 12-digit data keeps working without manual migration.
 - **Tests**: 59/59 pass across WA bot + iter-7 + OTP + PO suites.
+
+## PDF Header Redesign — 2026-05-11
+Per user request matching the supplied taxinvoice (1).pdf reference:
+- Document title (`QUOTATION` / `TAX INVOICE` / `PROFORMA INVOICE`) is now at the **very top, centered, bigger (22px / 6px letter-spacing) and underlined by a horizontal line** rendered as a `border-bottom` on `.head-title` — instead of the previous small `.underline` decoration.
+- **Logo moved to the right** (38% column, right-aligned).
+- **Seller info block moved to the left** (62% column).
+- GST + PAN line unchanged at the bottom of the header.
+- Verified by re-rendering a sample quote PDF and confirming layout via the document analyzer.
+

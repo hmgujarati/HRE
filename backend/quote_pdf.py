@@ -111,12 +111,12 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .col { flex: 1; }
   table { width: 100%; border-collapse: collapse; }
   td, th { vertical-align: top; padding: 4px 6px; }
-  .head-title { font-weight: 700; font-size: 18px; letter-spacing: 6px; padding: 6px 0 2px; }
+  .head-title { font-weight: 700; font-size: 22px; letter-spacing: 6px; padding: 10px 0 8px; text-align: center; border-bottom: 1.5px solid #000; }
   .header { border-bottom: 2px solid #000; }
-  .header .top { display: table; width: 100%; padding: 0 12px 8px; }
-  .header .top .l { display: table-cell; width: 33%; vertical-align: top; }
-  .header .top .r { display: table-cell; width: 67%; vertical-align: top; text-align: right; }
-  .header .top img { height: 60px; }
+  .header .top { display: table; width: 100%; padding: 10px 12px; }
+  .header .top .l { display: table-cell; width: 62%; vertical-align: middle; }
+  .header .top .r { display: table-cell; width: 38%; vertical-align: middle; text-align: right; }
+  .header .top img { height: 64px; }
   .header .gstline { display: table; width: 100%; border-top: 1px solid #000; font-weight: 700; }
   .header .gstline > div { display: table-cell; padding: 3px 10px; }
   .header .gstline .l { border-right: 1px solid #000; }
@@ -164,15 +164,15 @@ _TEMPLATE = r"""<!DOCTYPE html>
 <body><div class="quote">
 
   <div class="header">
-    <div class="center head-title underline">{{ doc_title }}</div>
+    <div class="head-title">{{ doc_title }}</div>
     <div class="top">
-      <div class="l">{% if logo_url %}<img src="{{ logo_url }}" alt="HREXPORTER">{% else %}<div class="bold" style="font-size:22px;letter-spacing:2px;">HREXPORTER</div>{% endif %}</div>
-      <div class="r">
+      <div class="l">
         <div class="bold" style="font-size:14px;">{{ seller.name }}</div>
         <div>{{ seller.address }}</div>
         <div>Ph. {{ seller.phones }}</div>
         <div>E-mail :- {{ seller.email }}</div>
       </div>
+      <div class="r">{% if logo_url %}<img src="{{ logo_url }}" alt="HREXPORTER">{% else %}<div class="bold" style="font-size:22px;letter-spacing:2px;">HREXPORTER</div>{% endif %}</div>
     </div>
     <div class="gstline">
       <div class="l">GSTIN No. {{ seller.gstin }}</div>
