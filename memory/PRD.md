@@ -367,3 +367,10 @@ Per direct user request (must NOT modify Settings → WhatsApp/Email tabs going 
 - **Regression test added**: `TestBotQuoteVisibleInMyQuotes::test_phone_norm_parity` asserts both helpers + `services.contacts.norm_phone` agree across multiple phone formats (`"+91 98765 43210"`, `"9876543210"`, etc.).
 - **Test updates**: `test_whatsapp_bot_flow.py` PHONE_NORM constant + `parse_inbound` assertion fixed for the new last-10 format. `TestZCleanup::test_delete_contact` now expects 409 (per the 2026-05-11 contact-delete guard).
 - **Final regression**: 164 passed / 6 pre-existing seed flakes / 1 deselected / 1 skipped.
+
+
+## Bug Fix — Harsh's "missing 3rd quote" + data cleanup (2026-05-11)
+- **Root cause**: The earlier bot phone-norm bug had created two `contacts` rows for Harsh (one canonical `phone_norm="8200663263"`, one stale `"918200663263"`). The 3rd quote was attached to the stale duplicate, so /my-quotes (which normalises to last-10) never surfaced it.
+- **Migration ran**: re-normalised every `contact.phone_norm` to last-10, merged duplicates collapsing to the same canonical key, and re-pointed all `quotations.contact_id` + `orders.contact_id` to the surviving canonical contact. For Harsh: 1 duplicate merged, 1 quote re-pointed. Now all 3 quotes appear under one contact.
+- **Hardening**: `/api/public/my-quotes` and `/api/public/quote/{qid}` now query `phone_norm ∈ {pn, "91" + pn}` so legacy 12-digit data keeps working without manual migration.
+- **Tests**: 59/59 pass across WA bot + iter-7 + OTP + PO suites.

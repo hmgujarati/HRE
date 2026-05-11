@@ -702,7 +702,11 @@ def _public_order_summary(order: dict) -> dict:
 @api.get("/public/my-quotes")
 async def public_my_quotes(token: str):
     sess = await _resolve_public_session(token)
-    contacts = await db.contacts.find({"phone_norm": sess["phone_norm"]}, {"_id": 0}).to_list(50)
+    pn = sess["phone_norm"]
+    # Tolerant lookup: accept any contact whose phone_norm matches the canonical
+    # last-10 digits OR the legacy country-code-prefixed form (covers data created
+    # before the 2026-05-11 phone-norm fix migration).
+    contacts = await db.contacts.find({"phone_norm": {"$in": [pn, f"91{pn}"]}}, {"_id": 0}).to_list(50)
     cids = [c["id"] for c in contacts]
     if not cids:
         return []
@@ -725,7 +729,8 @@ async def public_quote_view(qid: str, token: str):
     if not quote:
         raise HTTPException(status_code=404, detail="Quote not found")
     contact = await db.contacts.find_one({"id": quote["contact_id"]}, {"_id": 0})
-    if not contact or contact.get("phone_norm") != sess["phone_norm"]:
+    pn = sess["phone_norm"]
+    if not contact or contact.get("phone_norm") not in (pn, f"91{pn}"):
         raise HTTPException(status_code=403, detail="This quote does not belong to your phone")
     return quote
 
