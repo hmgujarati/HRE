@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
+import StateSelect from "@/components/StateSelect";
 import { Plus, MagnifyingGlass, PencilSimple, Trash, X, Check, AddressBook, FileText, Phone, Envelope } from "@phosphor-icons/react";
 import { toast } from "sonner";
 
@@ -182,7 +183,7 @@ export default function Contacts() {
                 <input value={edit.gst_number || ""} onChange={(e) => setEdit({ ...edit, gst_number: e.target.value })} className="cinp font-mono" placeholder="22AAAAA0000A1Z5" />
               </Field>
               <Field label="State *">
-                <input required value={edit.state || ""} onChange={(e) => setEdit({ ...edit, state: e.target.value })} className="cinp" placeholder="Gujarat / Maharashtra / …" data-testid="contact-state-input" />
+                <StateSelect required value={edit.state || ""} onChange={(v) => setEdit({ ...edit, state: v })} testId="contact-state-input" />
               </Field>
               <Field label="Source">
                 <select value={edit.source || "manual"} onChange={(e) => setEdit({ ...edit, source: e.target.value })} className="cinp bg-white">

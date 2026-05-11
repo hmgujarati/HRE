@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { ArrowRight, ShieldCheck, Trash, Phone, ShoppingCart, Check } from "@phosphor-icons/react";
 import { toast } from "sonner";
+import StateSelect from "@/components/StateSelect";
 
 const CART_KEY = "hre_public_cart_v1";
 
@@ -214,7 +215,10 @@ export default function RequestQuote() {
               <Input label="Phone *" required value={details.phone} onChange={(v) => setDetails({ ...details, phone: v })} placeholder="+91 98xxx xxxxx" testId="public-phone" />
               <Input label="Email *" required type="email" value={details.email} onChange={(v) => setDetails({ ...details, email: v })} testId="public-email" placeholder="you@company.com" />
               <Input label="GST Number" value={details.gst_number} onChange={(v) => setDetails({ ...details, gst_number: v })} />
-              <Input label="State *" required value={details.state} onChange={(v) => setDetails({ ...details, state: v })} placeholder="Gujarat / Maharashtra / …" testId="public-state" />
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-700 mb-1 block">State *</label>
+                <StateSelect required value={details.state} onChange={(v) => setDetails({ ...details, state: v })} testId="public-state" />
+              </div>
               <TextArea label="Billing Address" span value={details.billing_address} onChange={(v) => setDetails({ ...details, billing_address: v })} />
               <TextArea label="Shipping Address" span value={details.shipping_address} onChange={(v) => setDetails({ ...details, shipping_address: v })} />
             </div>

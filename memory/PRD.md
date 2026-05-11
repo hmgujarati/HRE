@@ -352,3 +352,10 @@ Per direct user request (must NOT modify Settings → WhatsApp/Email tabs going 
   - `TestContactDeleteGuards` — 3 cases: delete without quote/order OK, delete with quote → 409, delete with order → 409.
   - `TestOrderDelete` — admin delete OK + 404 on unknown id.
 - All 22/22 iteration-7 tests pass.
+
+
+## Searchable State Dropdown — 2026-05-11
+- New reusable `frontend/src/components/StateSelect.jsx` — searchable dropdown with **28 Indian states + 8 Union Territories + "Outside India"** (pinned at bottom). Includes click-outside dismiss, Esc-to-close, auto-focus on search input, optgroup-style headings (State / Union Territory / International), and a clear (×) button when a value is selected. Uses a hidden mirror `<input required>` so native browser form validation still flags an empty selection.
+- Wired into both **admin Contacts** (`Contacts.jsx`) and the **public RequestQuote** (`RequestQuote.jsx`) forms — replacing the prior free-text input.
+- GST logic unchanged in PDF: "Outside India" is treated as inter-state → IGST (same as any non-Gujarat state).
+- Bot flow stays free-text for now (constrained by WhatsApp UX — interactive lists max 10 rows, can't fit all 37 options cleanly).
