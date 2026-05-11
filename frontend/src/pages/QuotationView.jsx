@@ -223,21 +223,24 @@ export default function QuotationView() {
 
       {/* Printable quotation */}
       <div className="p-8 print:p-0">
-        <div className="max-w-[210mm] mx-auto bg-white border border-zinc-300 print:border-0 quote-print" id="printable-quote">
+        <div className="max-w-[210mm] mx-auto">
+          {/* Document title — OUTSIDE the box, no underline */}
+          <div className="text-center pb-2 pt-1">
+            <span className="font-bold text-2xl tracking-[0.4em]">QUOTATION</span>
+          </div>
+
+          <div className="bg-white border border-black print:border-black quote-print" id="printable-quote">
           {/* HEADER */}
           <div className="border-b-2 border-black">
-            <div className="text-center pt-3 pb-1">
-              <span className="font-bold text-xl tracking-[0.3em] underline">QUOTATION</span>
-            </div>
-            <div className="grid grid-cols-12 px-4 pb-3 gap-3">
-              <div className="col-span-4 flex items-start">
-                <img src="/hre-logo-light-bg.png" alt="HREXPORTER" className="h-20 object-contain" />
-              </div>
-              <div className="col-span-8 text-right">
+            <div className="grid grid-cols-12 px-4 py-3 gap-3 items-center">
+              <div className="col-span-8">
                 <div className="font-bold text-lg leading-tight">{SELLER.name}</div>
                 <div className="text-[11px] leading-tight">{SELLER.address}</div>
                 <div className="text-[11px] leading-tight">Ph. {SELLER.phones}</div>
                 <div className="text-[11px] leading-tight">E-mail :- {SELLER.email}</div>
+              </div>
+              <div className="col-span-4 flex items-center justify-end">
+                <img src="/hre-logo-light-bg.png" alt="HREXPORTER" className="h-20 object-contain" />
               </div>
             </div>
             <div className="border-t border-black grid grid-cols-2 text-[11px] font-bold">
@@ -403,12 +406,15 @@ export default function QuotationView() {
             </div>
             <div className="col-span-5 p-3 flex flex-col items-end justify-between text-right">
               <div className="font-bold">E & O.E.</div>
-              <div className="mt-12">
+              <div className="mt-8">
                 <div className="font-bold uppercase">For, {SELLER.name}</div>
-                <div className="border-t border-black mt-12 pt-1 text-[10px]">(Authorized Signatory)</div>
+                <div className="mt-12 text-[10px] italic text-zinc-600 leading-snug">
+                  This is a system-generated quotation.<br/>No signature is required.
+                </div>
               </div>
             </div>
           </div>
+        </div>
         </div>
       </div>
 
