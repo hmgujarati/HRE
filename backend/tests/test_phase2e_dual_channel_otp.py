@@ -39,7 +39,7 @@ sys.path.insert(0, "/app/backend")
 from dotenv import load_dotenv  # noqa: E402
 load_dotenv("/app/backend/.env")
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://hre-crm-phase1-1.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://quotation-system-20.preview.emergentagent.com").rstrip("/")
 ADMIN_EMAIL = "admin@hrexporter.com"
 ADMIN_PASSWORD = "Admin@123"
 HARSH_PHONE = "8200663263"           # exists in contacts → email hmgujarati@gmail.com

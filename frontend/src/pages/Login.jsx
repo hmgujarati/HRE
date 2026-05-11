@@ -7,8 +7,8 @@ import { ArrowRight, ShieldCheck } from "@phosphor-icons/react";
 export default function Login() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("admin@hrexporter.com");
-  const [password, setPassword] = useState("Admin@123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [stats, setStats] = useState(null);
@@ -129,9 +129,6 @@ export default function Login() {
             </button>
           </div>
 
-          <div className="mt-10 pt-6 border-t border-zinc-200 text-xs text-zinc-500 font-mono">
-            Default admin: <span className="text-zinc-900">admin@hrexporter.com</span> / <span className="text-zinc-900">Admin@123</span>
-          </div>
         </form>
       </div>
     </div>
