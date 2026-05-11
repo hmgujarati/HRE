@@ -627,11 +627,27 @@ async def _send_variant_matches(wa: dict, db, phone: str, family_id: str,
     for v in top:
         title = (v.get("product_code") or v.get("product_name") or "Variant").strip()
         price = float(v.get("final_price") or 0)
+        cs = (v.get("cable_size") or "").strip()
+        hs = (v.get("hole_size") or "").strip()
         dim_str = _format_dim_row(v.get("dimensions") or {}, dim_keys)
+        parts: List[str] = []
         if price > 0:
-            desc = f"₹{price:,.2f}" + (f" · {dim_str}" if dim_str else "")
-        else:
-            desc = dim_str or "Tap to select"
+            parts.append(f"₹{price:,.2f}")
+        if cs:
+            parts.append(cs)
+        if hs:
+            parts.append(f"⌀{hs}")
+        # Always show cable+hole; pack as many distinguishing dim tokens as fit
+        # under WhatsApp's 72-char description limit.
+        base = " · ".join(parts)
+        if dim_str:
+            for tok in dim_str.split(" · "):
+                candidate = f"{base} · {tok}" if base else tok
+                if len(candidate) <= 72:
+                    base = candidate
+                else:
+                    break
+        desc = base or "Tap to select"
         rows.append({"id": f"var:{v['id']}", "title": title[:24], "description": desc[:72]})
     body = (
         f"Top {len(top)} closest matches for cable={cable_target}"
