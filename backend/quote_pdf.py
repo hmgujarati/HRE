@@ -111,7 +111,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .col { flex: 1; }
   table { width: 100%; border-collapse: collapse; }
   td, th { vertical-align: top; padding: 4px 6px; }
-  .head-title { font-weight: 700; font-size: 22px; letter-spacing: 6px; padding: 0 0 10px; text-align: center; }
+  .head-title { font-weight: 700; font-size: 22px; letter-spacing: 6px; padding: 0 0 10px; text-align: center; text-decoration: none; }
   .header { border-bottom: 2px solid #000; }
   .header .top { display: table; width: 100%; padding: 10px 12px; }
   .header .top .l { display: table-cell; width: 62%; vertical-align: middle; }
@@ -294,7 +294,13 @@ _TEMPLATE = r"""<!DOCTYPE html>
       <div class="bold">E &amp; O.E.</div>
       <div class="sig">
         <div class="bold" style="text-transform:uppercase;">For, {{ seller.name }}</div>
+        {% if doc_title|upper == "QUOTATION" %}
+        <div style="margin-top:60px; font-size:10px; font-style:italic; color:#333;">
+          This is a system-generated quotation.<br>No signature is required.
+        </div>
+        {% else %}
         <div class="line">(Authorized Signatory)</div>
+        {% endif %}
       </div>
     </div>
   </div>
