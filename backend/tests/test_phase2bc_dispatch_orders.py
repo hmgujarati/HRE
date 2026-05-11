@@ -422,8 +422,11 @@ class TestZCleanup:
         qid = STATE.get("quote_id")
         if not qid:
             pytest.skip("no quote to delete")
-        r = admin_client.delete(f"{BASE_URL}/api/quotations/{qid}")
-        assert r.status_code in (200, 204), r.text
+        # Per business rule (2026-05-11), quotes with orders cannot be hard-deleted.
+        # The earlier tests in this class converted the quote to ≥1 orders, so we
+        # archive instead (matching the recommended admin workflow).
+        r = admin_client.post(f"{BASE_URL}/api/quotations/{qid}/archive")
+        assert r.status_code == 200, r.text
 
     def test_delete_contact(self, admin_client):
         cid = STATE.get("contact_id")

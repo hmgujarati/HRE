@@ -256,6 +256,16 @@ class TestFLoginStart:
         # Disable both → dev path so we can assert dev_otp + email_hint together
         _put_integrations(api, admin_headers,
                           wa_patch={"enabled": False}, smtp_patch={"enabled": False})
+        # Seed the expected contact (idempotent — server upserts by phone/email).
+        # This test used to rely on cross-test data; make it self-sufficient.
+        seed = api.post(
+            f"{BASE_URL}/api/contacts",
+            json={"name": "Harsh Mandlik", "company": "Harsh Co",
+                  "phone": HARSH_PHONE, "email": HARSH_EMAIL,
+                  "state": "Gujarat", "source": "manual"},
+            headers=admin_headers,
+        )
+        assert seed.status_code == 200, seed.text
         r = api.post(f"{BASE_URL}/api/public/my-quotes/login/start",
                      json={"phone": HARSH_PHONE})
         assert r.status_code == 200, r.text

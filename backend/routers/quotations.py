@@ -213,14 +213,6 @@ async def revise_quotation(qid: str,
     return new_doc
 
 
-@router.delete("/quotations/{qid}")
-async def delete_quotation(qid: str, _: dict = Depends(require_role("admin"))):
-    res = await db.quotations.delete_one({"id": qid})
-    if res.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Quotation not found")
-    return {"ok": True}
-
-
 @router.post("/quotations/{qid}/send")
 async def send_quotation_dispatch(qid: str, _: dict = Depends(require_role("admin", "manager"))):
     """Manually generate the PDF and dispatch to customer via WhatsApp + Email."""

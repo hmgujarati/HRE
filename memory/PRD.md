@@ -322,3 +322,24 @@ Build Phase 1 of CRM + WhatsApp quotation system for HRE Exporter (ISO 9001 cabl
 - P3: `/api/quotations/{qid}/diff/{revision_id}` revision-diff endpoint
 - Hygiene: fix pre-existing flakes — `test_advance_through_production_stages` (seeded order missing dispatch docs) and `test_hre_crm_backend.py` family/dashboard tests (DB only has 1 family vs expected ≥3)
 - Hygiene: replace `@app.on_event("startup"/"shutdown")` with FastAPI lifespan handlers (deprecation warnings)
+
+
+## Business-Rule Batch — 2026-05-11
+Per direct user request (must NOT modify Settings → WhatsApp/Email tabs going forward):
+
+**Behavior changes**
+- Multiple orders per quote are now ALLOWED. The previous 409 'Order already exists' guard in `routers/orders.py::create_order_from_quote` was removed. Each conversion mints a new `HRE/ORD/YYYY-YY/NNNN` number.
+- Customer **PO upload is gated to `quote.status == "approved"`** only (was previously `sent` or `approved`). Backend: `server.py::public_submit_po` (400 with friendly message otherwise). Frontend: `MyQuotes.jsx` only shows the *Submit PO* button on approved quotes.
+- **WhatsApp chatbot now produces a QUOTATION**, not a Proforma Invoice. `_bot_finalize_quote` was rewritten to insert a quotation (`status=sent`) and dispatch the quote PDF — NO order, NO PI. PI now only happens via admin → approve → customer PO upload → admin generates PI.
+- **State + Company are mandatory** for: admin Contacts (`POST/PUT /api/contacts`), public quote-request signup (`/api/public/quote-requests/start`), and the WA bot flow (new `ST_ASK_STATE` between `ASK_COMPANY` and `PICK_MATERIAL`). Returning customers with a missing required field are re-prompted only for the missing one.
+- **Logged-in customers skip the "enter details" form**: new `GET /api/public/me?token=…` returns the contact profile; `RequestQuote.jsx` auto-fills it and jumps to step 3. New `POST /api/public/me/quote/create?token=…` creates the quote without requiring a fresh OTP request_id.
+- **IGST default**: empty/unknown buyer state is now treated as inter-state in `quote_pdf.py:345`. Outside-Gujarat → IGST, intra-Gujarat → CGST+SGST.
+- **Admin Quote actions**: new 3-dot menu in `Quotations.jsx` with `Archive`, `Unarchive`, `Delete (with confirm dialog)`. Backend: `POST /api/quotations/{qid}/archive`, `POST /api/quotations/{qid}/unarchive`, `DELETE /api/quotations/{qid}` (admin-only). Delete is BLOCKED with 409 when an order is linked to the quote ("Archive instead"). Default `GET /api/quotations` hides archived; pass `?archived=true` to view them.
+
+**Critical bug found mid-batch + fixed**
+- `routers/quotations.py` had TWO `@router.delete("/quotations/{qid}")` handlers (the old un-guarded one at line 216 + the new guarded one at line 347). FastAPI silently uses the first, so the new order-linked guard was dead code. Removed the stale handler.
+
+**Tests**
+- New `tests/test_iteration7_new_behaviors.py` — 17 targeted tests for the batch (16/17 pass at agent stage, all 17 after the duplicate-route fix).
+- Updated: `test_phase2bc_dispatch_orders.py` (allow-multi-orders + alias 200 + `test_delete_quote` now archives because the quote has linked orders); `test_phase2d_customer_po_submit.py` (PO submit pre-condition flips quote to `approved`); `test_phase2a_crm_quotations.py::test_upsert_by_phone` (passes state); `test_phase2e_dual_channel_otp.py` (seeded contact in `test_known_contact_returns_email_hint`; `_create_qr` passes state); `test_whatsapp_bot_flow.py` (full flow asserts ASK_STATE + quote-only finalization).
+- Final regression: **159 passed / 1 skipped / 6 pre-existing seed flakes** (unchanged from prior iterations).
