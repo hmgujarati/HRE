@@ -383,3 +383,12 @@ Per user request matching the supplied taxinvoice (1).pdf reference:
 - GST + PAN line unchanged at the bottom of the header.
 - Verified by re-rendering a sample quote PDF and confirming layout via the document analyzer.
 
+
+
+## Order Dispatch UX — IST, Combined PDF, LR Fallback (2026-05-11)
+- **IST everywhere customer-facing**: All timestamps shown to customers (WA template `field_4`, "Updated:" line in dispatch text, auto-generated quote notes) now render in `IST` (`UTC+5:30`) with an explicit `IST` suffix. Database still stores UTC.
+- **E-way Bill + Tax Invoice combined into ONE PDF**: when `upload_dispatch_docs` accepts both files, `services/dispatch.merge_pdfs_for_dispatch()` (uses `pypdf`) concatenates them into `documents.dispatch_bundle.pdf`. The `dispatched`-stage WhatsApp template now ships this single attachment instead of two separate docs — surviving Meta's 24-hour session policy (second non-template message would otherwise be silently blocked).
+- **LR copy fallback**: when no `order_lr_template` (or any stage template) is configured in Settings, the dispatch now logs a clear `whatsapp_skip_reason` instead of silently no-op'ing. If there's a primary attachment, a best-effort `send_whatsapp_document` is attempted (works only inside the 24h customer-initiated window).
+- New helper test: `merge_pdfs_for_dispatch` smoke-checked with 2 dummy 1-page PDFs → 2-page bundle.
+- `pypdf==6.11.0` added to `requirements.txt`.
+- All 59 dispatch + bot + iter-7 tests pass.

@@ -35,8 +35,60 @@ from services.integrations import (
 logger = logging.getLogger("hre.dispatch")
 
 
+# Indian Standard Time — IST is UTC+5:30. All customer-facing timestamps
+# (PDF dates, WhatsApp message text) MUST be IST per business request (2026-05-11).
+# We still persist datetimes as UTC in MongoDB; this constant is only for display.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
 def _now_dt() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _now_ist() -> datetime:
+    return datetime.now(IST)
+
+
+def merge_pdfs_for_dispatch(order_id: str, paths: List[Path]) -> Optional[Dict[str, Any]]:
+    """Concatenate multiple PDFs into a single dispatch bundle so we can ship
+    Invoice + E-way Bill in ONE WhatsApp template message (Meta's 24-hour
+    session policy blocks a 2nd document outside the customer-initiated
+    window). Returns a `doc` dict shaped like the other documents.* entries
+    (filename, url, uploaded_at, source), or None if pypdf is missing /
+    no inputs found."""
+    try:
+        from pypdf import PdfReader, PdfWriter
+    except Exception:
+        logger.warning("[dispatch-merge] pypdf not installed; skipping merge")
+        return None
+    valid_paths = [p for p in paths if p and p.exists()]
+    if len(valid_paths) < 2:
+        return None  # nothing to merge
+    out_dir = UPLOAD_DIR / "orders" / order_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_name = f"dispatch_bundle_{secrets.token_hex(4)}.pdf"
+    out_path = out_dir / out_name
+    writer = PdfWriter()
+    for src in valid_paths:
+        try:
+            reader = PdfReader(str(src))
+            for page in reader.pages:
+                writer.add_page(page)
+        except Exception as e:
+            logger.warning(f"[dispatch-merge] failed to read {src}: {e}")
+    if not writer.pages:
+        return None
+    with open(out_path, "wb") as fh:
+        writer.write(fh)
+    rel = f"/api/uploads/orders/{order_id}/{out_name}"
+    return {
+        "filename": out_name,
+        "url": rel,
+        "uploaded_at": now_iso(),
+        "uploaded_by": "system",
+        "source": "merged",
+        "components": [p.name for p in valid_paths],
+    }
 
 
 # ─────────────────── Order pipeline constants ───────────────────
@@ -436,7 +488,7 @@ async def order_auto_notify(order: dict, stage: str) -> Optional[dict]:
     ord_no = order.get("order_number") or ""
     stage_label = STAGE_TO_LABEL.get(stage, stage)
     stage_template_label = STAGE_TEMPLATE_LABEL.get(stage, stage_label)
-    timestamp = datetime.now().strftime("%d-%m-%Y %H:%M")
+    timestamp = _now_ist().strftime("%d-%m-%Y %H:%M IST")
     eta = (order.get("expected_completion_date") or "").strip()
     eta_pretty = ""
     if eta:
@@ -470,8 +522,15 @@ async def order_auto_notify(order: dict, stage: str) -> Optional[dict]:
                 "path": local_path if local_path.exists() else None,
             })
     elif stage == "dispatched":
-        add_doc(docs.get("invoice"), "Tax Invoice")
-        add_doc(docs.get("eway_bill"), "E-way Bill")
+        # Prefer the merged bundle (Invoice + E-way Bill in ONE PDF) — single
+        # WhatsApp template attachment survives Meta's 24-hour rule. Fall back
+        # to the two individual docs if the merge didn't run for any reason.
+        bundle = docs.get("dispatch_bundle")
+        if bundle and bundle.get("filename"):
+            add_doc(bundle, "Dispatch Bundle (Invoice + E-way Bill)")
+        else:
+            add_doc(docs.get("invoice"), "Tax Invoice")
+            add_doc(docs.get("eway_bill"), "E-way Bill")
     elif stage == "lr_received":
         add_doc(docs.get("lr"), "LR Copy")
 
@@ -480,7 +539,9 @@ async def order_auto_notify(order: dict, stage: str) -> Optional[dict]:
     result: Dict[str, Any] = {"template": tpl_name, "stage": stage, "whatsapp": False, "email": False}
     open_token = secrets.token_urlsafe(24)
 
-    if tpl_name and phone and wa.get("enabled") and wa.get("vendor_uid") and wa.get("token"):
+    if not (phone and wa.get("enabled") and wa.get("vendor_uid") and wa.get("token")):
+        result["whatsapp_skip_reason"] = "WhatsApp integration not configured"
+    elif tpl_name and phone and wa.get("enabled") and wa.get("vendor_uid") and wa.get("token"):
         try:
             extra: Dict[str, Any] = {"field_2": ord_no, "field_3": stage_template_label, "field_4": field_4_value}
             if primary:
@@ -512,6 +573,33 @@ async def order_auto_notify(order: dict, stage: str) -> Optional[dict]:
         except Exception as e:
             logger.exception(f"[Order notify] stage={stage} WA unexpected error")
             result["whatsapp_error"] = str(e)
+    elif phone and wa.get("enabled") and wa.get("vendor_uid") and wa.get("token") and not tpl_name:
+        # No outbound template configured for this stage — try a direct document
+        # message as a best-effort fallback (works only inside the 24h session).
+        if primary:
+            try:
+                body = await send_whatsapp_document(
+                    wa, phone, media_url=primary["url"],
+                    file_name=primary["filename"],
+                    caption=f"Hi {customer}, your order *{ord_no}* — *{stage_label}*. Attached: {primary['label']}.",
+                )
+                data = body.get("data") if isinstance(body, dict) else {}
+                result["whatsapp"] = True
+                result["wamid"] = data.get("wamid")
+                result["whatsapp_status"] = "sent (fallback, no template)"
+                result["whatsapp_note"] = (
+                    f"No outbound template configured for stage='{stage}'. "
+                    f"Sent as direct document — works only if customer messaged us in the last 24h."
+                )
+            except Exception as e:
+                logger.warning(f"[Order notify] stage={stage} WA fallback failed: {e}")
+                result["whatsapp_error"] = str(e)
+                result["whatsapp_skip_reason"] = (
+                    f"No template '{STAGE_TEMPLATE_LABEL.get(stage, stage)}' configured "
+                    f"in Settings → WhatsApp; fallback also failed (24h window?)."
+                )
+        else:
+            result["whatsapp_skip_reason"] = f"No template configured for stage='{stage}' and no attachment to fall back to."
 
     if email and sm.get("enabled") and sm.get("host") and sm.get("username") and sm.get("password") and sm.get("from_email"):
         attach_paths = [a["path"] for a in attachments if a.get("path")]
@@ -580,7 +668,7 @@ async def notify_production_update(order: dict, note: str) -> Optional[dict]:
             email = email or (live.get("email") or "").strip()
     customer = order.get("contact_name") or order.get("contact_company") or "Customer"
     ord_no = order.get("order_number") or ""
-    timestamp_raw = datetime.now().strftime("%d-%m-%Y %H:%M")
+    timestamp_raw = _now_ist().strftime("%d-%m-%Y %H:%M IST")
     eta = (order.get("expected_completion_date") or "").strip()
     eta_pretty = ""
     if eta:

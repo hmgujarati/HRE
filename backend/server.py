@@ -57,6 +57,7 @@ from services.dispatch import (
     generate_quote_pdf as _generate_quote_pdf,
     dispatch_finalised_quote as _dispatch_finalised_quote,
     _now_dt,
+    _now_ist,
     STAGE_ORDER, STAGE_TO_LABEL,
     mint_order_from_quote as _mint_order_from_quote,
     next_order_number as _next_order_number,
@@ -205,7 +206,7 @@ async def _bot_finalize_quote(*, line_items: List[Dict[str, Any]], customer: Dic
         "place_of_supply": contact.get("state", ""),
         "currency": "INR",
         "valid_until": (datetime.now(timezone.utc) + timedelta(days=15)).date().isoformat(),
-        "notes": f"Auto-generated via WhatsApp bot on {datetime.now().strftime('%d-%m-%Y %H:%M')}",
+        "notes": f"Auto-generated via WhatsApp bot on {_now_ist().strftime('%d-%m-%Y %H:%M IST')}",
         "terms": "PAYMENT: 50% advance, 50% before dispatch.\nDelivery: 15-20 working days post advance.\nPrices are ex-works unless specified.",
         "line_items": enriched_lines,
         **totals,
@@ -798,7 +799,7 @@ async def _notify_admin_po_received(order: dict, quote: dict, contact: dict, has
             extra: Dict[str, Any] = {
                 "field_2": quote_no,
                 "field_3": order_no or "(new)",
-                "field_4": datetime.now().strftime("%d-%m-%Y %H:%M"),
+                "field_4": _now_ist().strftime("%d-%m-%Y %H:%M IST"),
             }
             if has_file and po_url:
                 extra["header_document"] = po_url

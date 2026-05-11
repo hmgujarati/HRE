@@ -391,6 +391,32 @@ async def upload_dispatch_docs(
         update_doc["$push"] = {"timeline": {"$each": events}}
     await db.orders.update_one({"id": oid}, update_doc)
     updated = await db.orders.find_one({"id": oid}, {"_id": 0})
+
+    # Merge invoice + e-way-bill into a single PDF so it can ship as ONE
+    # WhatsApp template attachment (Meta's 24-hour session policy means
+    # outside-window non-template follow-ups silently fail).
+    final_docs = updated.get("documents") or {}
+    inv_doc = final_docs.get("invoice") or {}
+    eway_doc = final_docs.get("eway_bill") or {}
+    try:
+        from services.dispatch import merge_pdfs_for_dispatch
+        from core import UPLOAD_DIR as _UD
+        paths = []
+        if inv_doc.get("filename"):
+            paths.append(_UD / "orders" / oid / inv_doc["filename"])
+        if eway_doc.get("filename"):
+            paths.append(_UD / "orders" / oid / eway_doc["filename"])
+        bundle = merge_pdfs_for_dispatch(oid, paths)
+        if bundle:
+            await db.orders.update_one(
+                {"id": oid},
+                {"$set": {"documents.dispatch_bundle": bundle, "updated_at": now_iso()}},
+            )
+            updated = await db.orders.find_one({"id": oid}, {"_id": 0})
+    except Exception:
+        # Non-fatal — fall back to sending the two attachments separately.
+        pass
+
     notify = await order_auto_notify(updated, "dispatched")
     if notify:
         notify["stage"] = "dispatched"
