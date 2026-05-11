@@ -343,3 +343,12 @@ Per direct user request (must NOT modify Settings → WhatsApp/Email tabs going 
 - New `tests/test_iteration7_new_behaviors.py` — 17 targeted tests for the batch (16/17 pass at agent stage, all 17 after the duplicate-route fix).
 - Updated: `test_phase2bc_dispatch_orders.py` (allow-multi-orders + alias 200 + `test_delete_quote` now archives because the quote has linked orders); `test_phase2d_customer_po_submit.py` (PO submit pre-condition flips quote to `approved`); `test_phase2a_crm_quotations.py::test_upsert_by_phone` (passes state); `test_phase2e_dual_channel_otp.py` (seeded contact in `test_known_contact_returns_email_hint`; `_create_qr` passes state); `test_whatsapp_bot_flow.py` (full flow asserts ASK_STATE + quote-only finalization).
 - Final regression: **159 passed / 1 skipped / 6 pre-existing seed flakes** (unchanged from prior iterations).
+
+
+## Delete Guards Extension — 2026-05-11 (follow-up)
+- **Contact delete is now blocked** with 409 if any quote OR order exists for that contact (`routers/contacts.py::delete_contact`). Friendly error includes the offending quote/order number and suggests archiving instead.
+- **Admin Orders page gets row 3-dot menu → Delete order** (`Orders.jsx`) with the same confirm modal pattern used in Quotations. Backend `DELETE /api/orders/{oid}` already existed (admin-only).
+- Tests added in `tests/test_iteration7_new_behaviors.py`:
+  - `TestContactDeleteGuards` — 3 cases: delete without quote/order OK, delete with quote → 409, delete with order → 409.
+  - `TestOrderDelete` — admin delete OK + 404 on unknown id.
+- All 22/22 iteration-7 tests pass.

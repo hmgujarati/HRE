@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
-import { MagnifyingGlass, Storefront, Calendar, Warning } from "@phosphor-icons/react";
+import { MagnifyingGlass, Storefront, Calendar, Warning, DotsThreeVertical, Trash } from "@phosphor-icons/react";
 import api, { formatApiError } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import { toast } from "sonner";
@@ -51,6 +51,8 @@ export default function Orders() {
   const [q, setQ] = useState("");
   const [stage, setStage] = useState("");
   const [loading, setLoading] = useState(true);
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -67,6 +69,27 @@ export default function Orders() {
 
   useEffect(() => { load(); }, [stage]);  // eslint-disable-line
   useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [q]);  // eslint-disable-line
+
+  // Close the row menu on outside click / Esc
+  useEffect(() => {
+    const close = () => setOpenMenuId(null);
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("click", close);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("click", close); document.removeEventListener("keydown", onKey); };
+  }, []);
+
+  const doDelete = async () => {
+    if (!confirmDelete) return;
+    try {
+      await api.delete(`/orders/${confirmDelete.id}`);
+      toast.success(`Order ${confirmDelete.order_number} deleted`);
+      setConfirmDelete(null);
+      await load();
+    } catch (err) {
+      toast.error(formatApiError(err?.response?.data?.detail));
+    }
+  };
 
   // In-flight = anything past pending_po and before delivered
   const inFlightWithoutEta = useMemo(() => {
@@ -130,13 +153,14 @@ export default function Orders() {
                 <th className="px-4 sm:px-6 py-3">ETA</th>
                 <th className="px-4 sm:px-6 py-3">Updated</th>
                 <th className="px-4 sm:px-6 py-3 text-right">Total ₹</th>
+                <th className="px-4 sm:px-6 py-3 text-right w-12"></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} className="px-6 py-12 text-center text-zinc-400">Loading…</td></tr>
+                <tr><td colSpan={9} className="px-6 py-12 text-center text-zinc-400">Loading…</td></tr>
               ) : items.length === 0 ? (
-                <tr><td colSpan={8} className="px-6 py-16 text-center text-zinc-400">
+                <tr><td colSpan={9} className="px-6 py-16 text-center text-zinc-400">
                   <Storefront size={36} weight="thin" className="mx-auto mb-2 text-zinc-300" />
                   <div className="font-heading font-black text-lg mb-1 text-zinc-600">No orders yet</div>
                   <div className="text-xs">Approve a quotation, then click <strong>Convert to Order</strong> to start tracking.</div>
@@ -175,6 +199,31 @@ export default function Orders() {
                     </td>
                     <td className="px-4 sm:px-6 py-3 text-xs font-mono text-zinc-500">{new Date(o.updated_at).toLocaleDateString()}</td>
                     <td className="px-4 sm:px-6 py-3 text-right font-mono font-bold">₹{(o.grand_total || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="px-4 sm:px-6 py-3 text-right relative">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === o.id ? null : o.id); }}
+                        className="text-zinc-500 hover:text-[#1A1A1A] p-1"
+                        data-testid={`order-menu-${o.id}`}
+                        aria-label="Row actions"
+                      >
+                        <DotsThreeVertical size={16} weight="bold" />
+                      </button>
+                      {openMenuId === o.id && (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="absolute right-4 top-9 z-20 w-44 bg-white border border-zinc-200 shadow-lg text-left"
+                          data-testid={`order-menu-popover-${o.id}`}
+                        >
+                          <button
+                            onClick={() => { setOpenMenuId(null); setConfirmDelete(o); }}
+                            data-testid={`order-delete-${o.id}`}
+                            className="w-full px-3 py-2 text-xs font-bold uppercase tracking-wider hover:bg-red-50 text-red-600 flex items-center gap-2"
+                          >
+                            <Trash size={14} /> Delete order
+                          </button>
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -182,6 +231,31 @@ export default function Orders() {
           </table>
         </div>
       </div>
+
+      {/* Delete confirmation modal */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setConfirmDelete(null)} data-testid="delete-order-modal">
+          <div className="bg-white border border-zinc-200 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-zinc-200">
+              <div className="font-heading font-black text-lg flex items-center gap-2 text-red-600"><Trash size={18} weight="bold" /> Delete order?</div>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-sm text-zinc-700">
+                Are you sure you want to delete <span className="font-mono font-bold">{confirmDelete.order_number}</span>?
+                <br /><span className="text-xs text-zinc-500">
+                  This cannot be undone. All uploaded files (PO, Proforma, Invoice, LR) and the production timeline will be lost.
+                </span>
+              </p>
+            </div>
+            <div className="px-5 py-4 border-t border-zinc-200 flex justify-end gap-2">
+              <button onClick={() => setConfirmDelete(null)} data-testid="delete-order-cancel" className="px-4 py-2 text-xs font-bold uppercase tracking-wider border border-zinc-300 hover:bg-zinc-50">Cancel</button>
+              <button onClick={doDelete} data-testid="delete-order-confirm" className="px-4 py-2 text-xs font-bold uppercase tracking-wider bg-red-600 hover:bg-red-700 text-white flex items-center gap-2">
+                <Trash size={12} weight="bold" /> Delete forever
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

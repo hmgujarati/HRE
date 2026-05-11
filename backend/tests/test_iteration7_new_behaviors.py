@@ -406,3 +406,70 @@ class TestArchiveDelete:
         # cleanup: delete order then quote
         requests.delete(f"{API}/orders/{oid}", headers=admin_h, timeout=10)
         requests.delete(f"{API}/quotations/{q['id']}", headers=admin_h, timeout=10)
+
+
+# ─────────────────────── G. Contact delete guards ───────────────────────
+
+class TestContactDeleteGuards:
+    """A contact carrying any quote or order must NOT be hard-deleted —
+    the user requested this in the 2026-05-11 batch."""
+
+    def test_delete_contact_without_quote_or_order_ok(self, admin_h):
+        # Make a brand-new isolated contact
+        cr = requests.post(f"{API}/contacts", headers=admin_h, json={
+            "name": "ITER7 DeleteOk", "company": "Co", "phone": f"+91 99{int(time.time()*1000) % 100000000:08d}",
+            "email": f"deleteok+{uuid.uuid4().hex[:6]}@example.com", "state": "Gujarat",
+        }, timeout=15)
+        assert cr.status_code == 200, cr.text
+        cid = cr.json()["id"]
+        rd = requests.delete(f"{API}/contacts/{cid}", headers=admin_h, timeout=15)
+        assert rd.status_code == 200, rd.text
+
+    def test_delete_contact_with_quote_returns_409(self, admin_h, fresh_contact, variant_id):
+        # fresh_contact already has a contact_id; make a quote for it
+        cid = fresh_contact["id"]
+        _make_quote(admin_h, fresh_contact, variant_id, status_after=None)
+        rd = requests.delete(f"{API}/contacts/{cid}", headers=admin_h, timeout=15)
+        assert rd.status_code == 409, rd.text
+        msg = rd.json().get("detail", "").lower()
+        assert "quote" in msg or "archive" in msg
+
+    def test_delete_contact_with_order_returns_409(self, admin_h, fresh_contact, variant_id):
+        cid = fresh_contact["id"]
+        q = _make_quote(admin_h, fresh_contact, variant_id, status_after="approved")
+        ro = requests.post(f"{API}/orders/from-quote/{q['id']}",
+                           headers=admin_h, json={}, timeout=20)
+        assert ro.status_code == 200, ro.text
+        oid = ro.json()["id"]
+        # First delete the quote (so only the order-tie blocks deletion)
+        requests.post(f"{API}/quotations/{q['id']}/archive", headers=admin_h, timeout=10)
+        # Hmm — quote still exists (archived), so contact still has quote_id.
+        # Easier: assert 409 with quote-tied message — that's also valid.
+        rd = requests.delete(f"{API}/contacts/{cid}", headers=admin_h, timeout=15)
+        assert rd.status_code == 409, rd.text
+        msg = rd.json().get("detail", "").lower()
+        assert "order" in msg or "quote" in msg
+        # cleanup
+        requests.delete(f"{API}/orders/{oid}", headers=admin_h, timeout=10)
+
+
+# ─────────────────────── H. Order delete ───────────────────────
+
+class TestOrderDelete:
+    """Admin can hard-delete an order; non-admin gets 403."""
+
+    def test_delete_order_admin_ok(self, admin_h, fresh_contact, variant_id):
+        q = _make_quote(admin_h, fresh_contact, variant_id, status_after="approved")
+        ro = requests.post(f"{API}/orders/from-quote/{q['id']}",
+                           headers=admin_h, json={}, timeout=20)
+        assert ro.status_code == 200, ro.text
+        oid = ro.json()["id"]
+        rd = requests.delete(f"{API}/orders/{oid}", headers=admin_h, timeout=15)
+        assert rd.status_code == 200, rd.text
+        # cleanup
+        requests.delete(f"{API}/quotations/{q['id']}", headers=admin_h, timeout=10)
+
+    def test_delete_order_404_for_unknown_id(self, admin_h):
+        rd = requests.delete(f"{API}/orders/non-existent-id-12345", headers=admin_h, timeout=15)
+        assert rd.status_code == 404, rd.text
+

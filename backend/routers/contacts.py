@@ -98,6 +98,21 @@ async def update_contact(cid: str, data: ContactIn,
 
 @router.delete("/contacts/{cid}")
 async def delete_contact(cid: str, _: dict = Depends(require_role("admin"))):
+    # Block deletion if this contact has any quote or order tied to them
+    # (data integrity: orders/quotes carry `contact_id`).
+    q = await db.quotations.find_one({"contact_id": cid}, {"_id": 0, "quote_number": 1})
+    if q:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete — quote {q['quote_number']} exists for this contact. "
+                   f"Archive the quote(s) first or keep the contact for history.",
+        )
+    o = await db.orders.find_one({"contact_id": cid}, {"_id": 0, "order_number": 1})
+    if o:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete — order {o['order_number']} exists for this contact.",
+        )
     res = await db.contacts.delete_one({"id": cid})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Contact not found")
