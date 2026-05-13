@@ -168,3 +168,36 @@ def classify_header(h: str) -> str:
     if any(k in n for k in ["price", "rate", "mrp", "cost", "amount", "hre"]):
         return "price"
     return f"dim:{h.strip()}"
+
+
+def parse_price_workbook(content: bytes) -> Tuple[List[str], List[List[Any]]]:
+    """Lightweight parser for a 2-column-style price sheet:
+    a Product Code column + a Price/Rate/HRE column. Used as a fallback when
+    `parse_variant_workbook` can't find a 3+ numeric data row (the variant
+    sheet shape). Tolerates a header row anywhere in the first 5 rows and
+    extra empty trailing columns."""
+    wb = openpyxl.load_workbook(BytesIO(content), data_only=True)
+    ws = wb.active
+    rows = [list(r) for r in ws.iter_rows(values_only=True)]
+    if not rows:
+        raise HTTPException(status_code=400, detail="Empty workbook")
+    n_cols = max((len(r) for r in rows), default=0)
+    rows = [list(r) + [None] * (n_cols - len(r)) for r in rows]
+
+    # Find header row: at least one cell maps to 'code' and at least one to 'price'.
+    header_row_idx = None
+    for ri in range(min(5, len(rows))):
+        roles = [classify_header(str(c)) if c is not None else "skip" for c in rows[ri]]
+        if "code" in roles and "price" in roles:
+            header_row_idx = ri
+            break
+    if header_row_idx is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not find a header row with both a Product Code and a Price column. "
+                   "Ensure the first row has labels like 'PROD. CODE' and 'Price'/'Rate'/'HRE'.",
+        )
+    headers = [str(c).strip() if c is not None else "" for c in rows[header_row_idx]]
+    data = rows[header_row_idx + 1:]
+    data = [r for r in data if any(c is not None and str(c).strip() != "" for c in r)]
+    return headers, data

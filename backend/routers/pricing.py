@@ -11,7 +11,7 @@ from core import (
 )
 from services.pricing import (
     apply_bulk_discount, classify_header, is_number, norm_code,
-    parse_variant_workbook, record_price_history,
+    parse_price_workbook, parse_variant_workbook, record_price_history,
 )
 
 router = APIRouter()
@@ -79,7 +79,14 @@ async def upload_prices_excel(
     try:
         headers, data_rows = parse_variant_workbook(content)
     except HTTPException:
-        raise
+        # Fall back to the simpler 2-column price-only format
+        # (header row + Code | Price rows, no dimension columns).
+        try:
+            headers, data_rows = parse_price_workbook(content)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse file: {e}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to parse file: {e}")
 
