@@ -351,7 +351,12 @@ def render_quote_pdf(quote: Dict[str, Any], output_path: Path, logo_url: str | N
     buyer_state = (quote.get("place_of_supply") or "").strip().upper()
     # Per business rule: any state OTHER than the seller's (Gujarat) — including
     # empty/unknown — is treated as inter-state → IGST. Intra-Gujarat → CGST+SGST.
-    is_interstate = buyer_state != SELLER["state"]
+    # Tolerant match: accepts "Gujarat", "GUJARAT", "Gujarati" (common typo),
+    # "Gujarat (GJ)", "GJ" so a user typo on the buyer state doesn't silently
+    # flip the invoice to IGST.
+    seller_state = SELLER["state"].upper()
+    is_intrastate = buyer_state.startswith(seller_state) or buyer_state == "GJ"
+    is_interstate = not is_intrastate
     line_items = quote.get("line_items") or []
     total_qty = sum(float(it.get("quantity") or 0) for it in line_items)
     gst_rate = float((line_items[0].get("gst_percentage") if line_items else 18) or 18)

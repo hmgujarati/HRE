@@ -6,6 +6,7 @@ import { ArrowLeft, Plus, Trash, Check, FloppyDisk } from "@phosphor-icons/react
 import { toast } from "sonner";
 import ContactPicker from "@/components/ContactPicker";
 import VariantSearchPicker from "@/components/VariantSearchPicker";
+import StateSelect from "@/components/StateSelect";
 
 export default function QuotationBuilder() {
   const { id } = useParams();
@@ -281,7 +282,8 @@ export default function QuotationBuilder() {
               </div>
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-700 mb-1 block">Place of Supply</label>
-                <input value={placeOfSupply} onChange={(e) => setPlaceOfSupply(e.target.value)} className="w-full border border-zinc-300 px-3 py-2 text-sm" placeholder={contact?.state || "State"} />
+                <StateSelect value={placeOfSupply} onChange={setPlaceOfSupply} placeholder={contact?.state || "Select state"} data-testid="quote-place-of-supply" />
+                <div className="text-[10px] text-zinc-500 mt-1">Used for GST: <span className="font-bold">Gujarat → CGST + SGST</span>, others → IGST.</div>
               </div>
             </div>
           </div>
