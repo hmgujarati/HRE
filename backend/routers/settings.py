@@ -1,7 +1,7 @@
 """Settings router — read/update integration settings + WhatsApp test/templates/sync + SMTP test."""
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 
 from core import PUBLIC_BASE_URL, SETTINGS_DOC_ID, db, now_iso, require_role
@@ -77,22 +77,34 @@ class SmtpTestIn(BaseModel):
 
 # ─────────────────── Routes ───────────────────
 
-def _with_webhook_url(resp: dict, secret: str) -> dict:
-    if PUBLIC_BASE_URL and secret:
-        resp["whatsapp"]["webhook_url"] = f"{PUBLIC_BASE_URL}/api/webhooks/bizchat/status?secret={secret}"
+def _with_webhook_url(resp: dict, secret: str, request: Optional[Request] = None) -> dict:
+    """Build the public webhook URL. Prefers PUBLIC_BASE_URL env, falls back to
+    the incoming request's host so the panel renders even on live servers
+    where the env var hasn't been baked in. Always sets a value when a secret
+    exists so the UI never hides the section."""
+    base = PUBLIC_BASE_URL
+    if not base and request is not None:
+        # X-Forwarded headers from the Kubernetes/Emergent ingress let us
+        # reconstruct the external HTTPS URL the customer sees.
+        proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+        if host:
+            base = f"{proto}://{host}"
+    if base and secret:
+        resp["whatsapp"]["webhook_url"] = f"{base.rstrip('/')}/api/webhooks/bizchat/status?secret={secret}"
     else:
         resp["whatsapp"]["webhook_url"] = ""
     return resp
 
 
 @router.get("/settings/integrations")
-async def get_integrations_endpoint(_: dict = Depends(require_role("admin", "manager"))):
+async def get_integrations_endpoint(request: Request, _: dict = Depends(require_role("admin", "manager"))):
     cur = await get_integrations()
-    return _with_webhook_url(public_integrations(cur), cur["whatsapp"].get("webhook_secret", ""))
+    return _with_webhook_url(public_integrations(cur), cur["whatsapp"].get("webhook_secret", ""), request)
 
 
 @router.put("/settings/integrations")
-async def update_integrations(data: IntegrationsIn, _: dict = Depends(require_role("admin"))):
+async def update_integrations(data: IntegrationsIn, request: Request, _: dict = Depends(require_role("admin"))):
     cur = await get_integrations()
     if data.whatsapp is not None:
         wa_in = data.whatsapp.model_dump()
@@ -111,7 +123,7 @@ async def update_integrations(data: IntegrationsIn, _: dict = Depends(require_ro
     cur["updated_at"] = now_iso()
     await db.settings.update_one({"id": SETTINGS_DOC_ID}, {"$set": cur}, upsert=True)
     refreshed = await get_integrations()
-    return _with_webhook_url(public_integrations(refreshed), refreshed["whatsapp"].get("webhook_secret", ""))
+    return _with_webhook_url(public_integrations(refreshed), refreshed["whatsapp"].get("webhook_secret", ""), request)
 
 
 @router.post("/settings/whatsapp/test")
