@@ -64,6 +64,56 @@ async def bulk_discount_preview(data: dict, _: dict = Depends(get_current_user))
     return {"count": count}
 
 
+@router.post("/pricing/toggle-priceless")
+async def toggle_priceless(user: dict = Depends(require_role("admin", "manager"))):
+    """Toggle the `active` flag on all variants with no price (base_price=0/null
+    or final_price=0/null). Same button handles both directions:
+    - If ANY priceless variant is currently active → deactivate all priceless ones.
+    - Otherwise (all priceless variants inactive) → reactivate them.
+    Returns: {action: 'deactivated'|'reactivated', count, total_priceless}.
+    """
+    priceless_q = {
+        "$or": [
+            {"base_price": {"$in": [None, 0, 0.0]}},
+            {"final_price": {"$in": [None, 0, 0.0]}},
+        ],
+    }
+    total = await db.product_variants.count_documents(priceless_q)
+    if total == 0:
+        return {"action": "noop", "count": 0, "total_priceless": 0}
+
+    any_active = await db.product_variants.count_documents({**priceless_q, "active": True})
+    if any_active > 0:
+        # Deactivate any priceless variants that are currently active.
+        res = await db.product_variants.update_many(
+            {**priceless_q, "active": True},
+            {"$set": {"active": False, "updated_at": now_iso()}},
+        )
+        return {"action": "deactivated", "count": res.modified_count, "total_priceless": total}
+    # All priceless variants are already inactive — reactivate them.
+    res = await db.product_variants.update_many(
+        {**priceless_q, "active": False},
+        {"$set": {"active": True, "updated_at": now_iso()}},
+    )
+    return {"action": "reactivated", "count": res.modified_count, "total_priceless": total}
+
+
+@router.get("/pricing/priceless-count")
+async def priceless_count(_: dict = Depends(require_role("admin", "manager"))):
+    """Lightweight count for the UI button label — how many variants have no price,
+    and how many of those are currently active (so the UI can show the next action).
+    """
+    priceless_q = {
+        "$or": [
+            {"base_price": {"$in": [None, 0, 0.0]}},
+            {"final_price": {"$in": [None, 0, 0.0]}},
+        ],
+    }
+    total = await db.product_variants.count_documents(priceless_q)
+    active = await db.product_variants.count_documents({**priceless_q, "active": True})
+    return {"total_priceless": total, "active_priceless": active}
+
+
 @router.post("/pricing/upload-prices-excel")
 async def upload_prices_excel(
     file: UploadFile = File(...),

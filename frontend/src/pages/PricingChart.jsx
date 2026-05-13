@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
-import { MagnifyingGlass, Plus, PencilSimple, Trash, ClockCounterClockwise, Lightning, Funnel, FileXls, CheckCircle } from "@phosphor-icons/react";
+import { MagnifyingGlass, Plus, PencilSimple, Trash, ClockCounterClockwise, Lightning, Funnel, FileXls, CheckCircle, Power } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import VariantFormDialog from "@/components/VariantFormDialog";
 import PriceHistoryModal from "@/components/PriceHistoryModal";
@@ -16,6 +16,15 @@ export default function PricingChart() {
   const [edit, setEdit] = useState(null);
   const [historyId, setHistoryId] = useState(null);
   const [bulk, setBulk] = useState(false);
+  const [priceless, setPriceless] = useState({ total_priceless: 0, active_priceless: 0 });
+  const [toggling, setToggling] = useState(false);
+
+  const loadPricelessCount = async () => {
+    try {
+      const r = await api.get("/pricing/priceless-count");
+      setPriceless(r.data);
+    } catch { /* admin/manager only — silently ignore */ }
+  };
 
   const load = async () => {
     const params = {};
@@ -27,6 +36,7 @@ export default function PricingChart() {
       api.get("/product-families"),
     ]);
     setVariants(v.data); setMats(m.data); setCats(c.data); setFamilies(f.data);
+    loadPricelessCount();
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [filters]);
@@ -38,6 +48,31 @@ export default function PricingChart() {
   const dimSummary = (d) => {
     if (!d) return "";
     return Object.entries(d).slice(0, 4).map(([k, v]) => `${k}=${v}`).join(" · ");
+  };
+
+  const togglePriceless = async () => {
+    const willDeactivate = priceless.active_priceless > 0;
+    const verb = willDeactivate ? "deactivate" : "reactivate";
+    if (!priceless.total_priceless) {
+      toast.info("No priceless variants found — every variant already has a price.");
+      return;
+    }
+    if (!window.confirm(`${verb === "deactivate" ? "Deactivate" : "Reactivate"} ${priceless.total_priceless} variants without a price?`)) return;
+    setToggling(true);
+    try {
+      const r = await api.post("/pricing/toggle-priceless");
+      const { action, count, total_priceless } = r.data || {};
+      if (action === "noop") {
+        toast.info("No priceless variants found.");
+      } else {
+        toast.success(`${action === "deactivated" ? "Deactivated" : "Reactivated"} ${count} of ${total_priceless} priceless variants.`);
+      }
+      await load();
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail) || "Failed");
+    } finally {
+      setToggling(false);
+    }
   };
 
   const remove = async (v) => {
@@ -61,6 +96,26 @@ export default function PricingChart() {
         actions={
           <div className="flex items-center gap-2">
             <PriceImport onDone={load} />
+            <button
+              onClick={togglePriceless}
+              disabled={toggling || !priceless.total_priceless}
+              data-testid="toggle-priceless-btn"
+              title={priceless.total_priceless ? `${priceless.total_priceless} variants have no price (${priceless.active_priceless} currently active)` : "No priceless variants"}
+              className={`border font-bold uppercase tracking-wider text-xs px-4 py-3 flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                priceless.active_priceless > 0
+                  ? 'border-red-500 text-red-600 hover:bg-red-600 hover:text-white'
+                  : 'border-emerald-500 text-emerald-700 hover:bg-emerald-600 hover:text-white'
+              }`}
+            >
+              <Power size={14} weight="bold" />
+              {toggling
+                ? "…"
+                : priceless.active_priceless > 0
+                  ? `Deactivate Priceless (${priceless.active_priceless})`
+                  : priceless.total_priceless > 0
+                    ? `Reactivate Priceless (${priceless.total_priceless})`
+                    : "No Priceless"}
+            </button>
             <button onClick={() => setBulk(true)} data-testid="bulk-discount-btn" className="border border-[#FBAE17] text-[#1A1A1A] hover:bg-[#FBAE17] font-bold uppercase tracking-wider text-xs px-4 py-3 flex items-center gap-2 transition-colors">
               <Lightning size={14} weight="fill" /> Bulk Discount
             </button>
