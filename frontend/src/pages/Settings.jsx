@@ -510,6 +510,29 @@ function SmtpTab({ canEdit }) {
 
 // ---------------- Account & Branding tabs (kept) ----------------
 function AccountTab({ user }) {
+  const [cur, setCur] = useState("");
+  const [pwd, setPwd] = useState("");
+  const [pwd2, setPwd2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [show, setShow] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (pwd.length < 8) { toast.error("New password must be at least 8 characters"); return; }
+    if (pwd !== pwd2) { toast.error("New passwords do not match"); return; }
+    if (pwd === cur) { toast.error("New password must be different from the current one"); return; }
+    setBusy(true);
+    try {
+      await api.post("/auth/change-password", { current_password: cur, new_password: pwd });
+      toast.success("Password updated. Use the new one on your next login.");
+      setCur(""); setPwd(""); setPwd2("");
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail) || "Failed to update password");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       <div className="border border-zinc-200 bg-white p-6">
@@ -521,6 +544,32 @@ function AccountTab({ user }) {
           <div><span className="text-zinc-500 mr-2">Role:</span><span className="text-[10px] uppercase tracking-wider font-bold bg-[#FBAE17] text-black px-2 py-0.5">{user?.role}</span></div>
         </div>
       </div>
+
+      <form onSubmit={submit} className="border border-zinc-200 bg-white p-6 space-y-4" data-testid="change-password-form">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">Security</div>
+          <h3 className="font-heading font-black text-lg">Change Password</h3>
+          <p className="text-xs text-zinc-500 mt-1">Updates only your own account. You'll keep your current session — only future logins will need the new password.</p>
+        </div>
+
+        <Field label="Current password" type={show ? "text" : "password"} value={cur} onChange={setCur} testId="pw-current" placeholder="••••••••" />
+        <Field label="New password" type={show ? "text" : "password"} value={pwd} onChange={setPwd} testId="pw-new" placeholder="Min 8 characters" hint="Use a unique password you don't use elsewhere." />
+        <Field label="Confirm new password" type={show ? "text" : "password"} value={pwd2} onChange={setPwd2} testId="pw-new2" placeholder="Re-enter the new password" />
+
+        <label className="flex items-center gap-2 text-xs text-zinc-600 cursor-pointer select-none">
+          <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} className="accent-[#FBAE17]" data-testid="pw-show" />
+          Show passwords
+        </label>
+
+        <button
+          type="submit"
+          disabled={busy || !cur || !pwd || !pwd2}
+          data-testid="pw-submit-btn"
+          className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-5 py-3 flex items-center gap-2 disabled:opacity-50"
+        >
+          <FloppyDisk size={14} weight="bold" /> {busy ? "Updating…" : "Update Password"}
+        </button>
+      </form>
     </div>
   );
 }
