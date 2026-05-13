@@ -60,6 +60,9 @@ DEFAULT_INTEGRATIONS = {
         "from_name": "HRE Exporter",
         "admin_notify_email": "",
     },
+    "catalog": {
+        "hide_empty_families": False,
+    },
 }
 
 
@@ -72,6 +75,7 @@ async def get_integrations() -> dict:
     out = {**DEFAULT_INTEGRATIONS, **doc}
     out["whatsapp"] = {**DEFAULT_INTEGRATIONS["whatsapp"], **(doc.get("whatsapp") or {})}
     out["smtp"] = {**DEFAULT_INTEGRATIONS["smtp"], **(doc.get("smtp") or {})}
+    out["catalog"] = {**DEFAULT_INTEGRATIONS["catalog"], **(doc.get("catalog") or {})}
     if not out["whatsapp"].get("webhook_secret"):
         out["whatsapp"]["webhook_secret"] = secrets.token_urlsafe(24)
         await db.settings.update_one(

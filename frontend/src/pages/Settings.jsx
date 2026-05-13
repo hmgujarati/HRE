@@ -3,11 +3,12 @@ import PageHeader from "@/components/PageHeader";
 import { useAuth } from "@/contexts/AuthContext";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { WhatsappLogo, Envelope, User, Palette, CheckCircle, Warning, PaperPlaneRight, FloppyDisk } from "@phosphor-icons/react";
+import { WhatsappLogo, Envelope, User, Palette, Storefront, CheckCircle, Warning, PaperPlaneRight, FloppyDisk } from "@phosphor-icons/react";
 
 const TABS = [
   { id: "whatsapp", label: "WhatsApp", icon: WhatsappLogo },
   { id: "smtp", label: "Email (SMTP)", icon: Envelope },
+  { id: "catalog", label: "Catalogue", icon: Storefront },
   { id: "account", label: "Account", icon: User },
   { id: "branding", label: "Branding", icon: Palette },
 ];
@@ -44,6 +45,7 @@ export default function Settings() {
       <div className="p-4 sm:p-8">
         {tab === "whatsapp" && <WhatsAppTab canEdit={isAdmin} />}
         {tab === "smtp" && <SmtpTab canEdit={isAdmin} />}
+        {tab === "catalog" && <CatalogTab canEdit={isAdmin} />}
         {tab === "account" && <AccountTab user={user} />}
         {tab === "branding" && <BrandingTab />}
       </div>
@@ -502,6 +504,65 @@ function SmtpTab({ canEdit }) {
               <pre className="font-mono text-[10px] whitespace-pre-wrap break-all">{JSON.stringify(testResult.ok ? testResult.response : testResult.error, null, 2)}</pre>
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- Catalogue tab ----------------
+function CatalogTab({ canEdit }) {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.get("/settings/integrations").then((r) => setData(r.data)).catch(() => setData({ catalog: { hide_empty_families: false } }));
+  }, []);
+
+  const toggle = async (next) => {
+    if (!canEdit) return;
+    setBusy(true);
+    try {
+      const r = await api.put("/settings/integrations", { catalog: { hide_empty_families: next } });
+      setData(r.data);
+      toast.success(next ? "Empty families will be hidden from public catalogue" : "All active families will be shown");
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail) || "Failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!data) return <div className="text-sm text-zinc-500">Loading…</div>;
+  const enabled = !!(data.catalog && data.catalog.hide_empty_families);
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="border border-zinc-200 bg-white p-6">
+        <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">Public Catalogue</div>
+        <h3 className="font-heading font-black text-lg mb-1">Hide families with no active variants</h3>
+        <p className="text-xs text-zinc-500 mb-5">
+          When enabled, any product family whose variants are <em>all</em> inactive (e.g. after using "Deactivate Priceless" on the Pricing Chart) will be hidden from the public catalogue and the smart variant search. Admin views are unaffected.
+        </p>
+
+        <label className="flex items-center justify-between gap-4 border border-zinc-300 px-4 py-3 cursor-pointer select-none">
+          <span className="text-sm font-medium text-[#1A1A1A]">
+            {enabled ? "Hide empty families" : "Show all active families"}
+          </span>
+          <button
+            type="button"
+            disabled={!canEdit || busy}
+            onClick={() => toggle(!enabled)}
+            data-testid="catalog-hide-empty-toggle"
+            aria-pressed={enabled}
+            className={`relative inline-flex h-6 w-11 items-center transition-colors disabled:opacity-50 ${enabled ? 'bg-[#FBAE17]' : 'bg-zinc-300'}`}
+          >
+            <span className={`inline-block h-4 w-4 transform bg-white transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+          </button>
+        </label>
+
+        <div className="text-[11px] text-zinc-500 mt-3">
+          Current state: <span className={`font-bold ${enabled ? 'text-emerald-700' : 'text-zinc-700'}`}>{enabled ? 'ON · Empty families hidden' : 'OFF · All active families visible'}</span>
         </div>
       </div>
     </div>

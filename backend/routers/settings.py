@@ -57,9 +57,14 @@ class SmtpSettingsIn(BaseModel):
     admin_notify_email: str = ""
 
 
+class CatalogSettingsIn(BaseModel):
+    hide_empty_families: bool = False
+
+
 class IntegrationsIn(BaseModel):
     whatsapp: Optional[WhatsAppSettingsIn] = None
     smtp: Optional[SmtpSettingsIn] = None
+    catalog: Optional[CatalogSettingsIn] = None
 
 
 class WhatsAppTestIn(BaseModel):
@@ -119,6 +124,8 @@ async def update_integrations(data: IntegrationsIn, request: Request, _: dict = 
         if sm_in.get("password") in (None, ""):
             sm_in["password"] = cur["smtp"].get("password", "")
         cur["smtp"] = {**cur["smtp"], **sm_in}
+    if data.catalog is not None:
+        cur["catalog"] = {**cur.get("catalog", {}), **data.catalog.model_dump()}
     cur["id"] = SETTINGS_DOC_ID
     cur["updated_at"] = now_iso()
     await db.settings.update_one({"id": SETTINGS_DOC_ID}, {"$set": cur}, upsert=True)
