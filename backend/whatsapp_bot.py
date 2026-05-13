@@ -19,6 +19,7 @@ Persists state to MongoDB collection `chatbot_sessions`:
 """
 
 from __future__ import annotations
+import asyncio
 import logging
 import os
 import re
@@ -483,18 +484,24 @@ async def _send_material_buttons(wa: dict, db, phone: str):
 
 async def _send_family_images(wa: dict, db, phone: str, family_id: str, family_name: str) -> None:
     """After picking a family, send (a) the lug photo and (b) the dimension drawing.
-    Silently no-ops if PUBLIC_BASE_URL isn't set or images aren't uploaded."""
+    Silently no-ops if PUBLIC_BASE_URL isn't set or images aren't uploaded.
+    Small delays between sends + after the last image so BizChat finishes the
+    media upload before the next text question lands (without the delays the
+    cable-size prompt sometimes arrives between/before the images)."""
     fam = await db.product_families.find_one(
         {"id": family_id},
         {"_id": 0, "main_product_image": 1, "dimension_drawing_image": 1},
     ) or {}
     product_img = _abs_url(fam.get("main_product_image"))
     dim_img = _abs_url(fam.get("dimension_drawing_image"))
+    sent_any = False
     if product_img:
         await _safe_send(
             send_image(wa, phone, product_img, caption=f"*{family_name}* — product photo"),
             phone, "family_product_image",
         )
+        sent_any = True
+        await asyncio.sleep(1.5)
     if dim_img:
         await _safe_send(
             send_image(
@@ -507,6 +514,12 @@ async def _send_family_images(wa: dict, db, phone: str, family_id: str, family_n
             ),
             phone, "family_dim_drawing",
         )
+        sent_any = True
+        await asyncio.sleep(1.5)
+    # Final pad if any image was sent so the next text prompt arrives AFTER
+    # WhatsApp has rendered both media messages on the customer's screen.
+    if sent_any:
+        await asyncio.sleep(1.0)
 
 
 async def _send_family_list(wa: dict, db, phone: str, material_id: str):
@@ -1069,23 +1082,34 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
                              phone, "bad_cable")
             return {"state": ST_ASK_CABLE, "customer_phone": phone, "actions_taken": ["bad_cable"]}
         ctx["current_cable_size"] = n
-        await _safe_send(send_text(wa, phone,
-                        f"Cable size: *{n} mm²*.\n\nNow the *hole size* in mm — reply with a *number only* (e.g. 6, 8, 10).\nType *skip* if you don't have a hole-size requirement."),
-                         phone, "ask_hole")
+        await _safe_send(send_buttons(
+            wa, phone,
+            body_text=(
+                f"Cable size: *{n} mm²*.\n\n"
+                "Now the *hole size* in mm — reply with a *number only* (e.g. 6, 8, 10), "
+                "or tap *Skip* below if you don't have a hole-size requirement."
+            ),
+            buttons=["Skip"],
+        ), phone, "ask_hole")
         await _save_session(db, phone_norm, ST_ASK_HOLE, ctx,
                             {"in": text, "at": _now_dt().isoformat(), "out": "ask_hole"})
         return {"state": ST_ASK_HOLE, "customer_phone": phone, "actions_taken": ["captured_cable"]}
 
-    # ─── State: ASK_HOLE — numeric or 'skip' ───
+    # ─── State: ASK_HOLE — numeric or 'skip' button / text ───
     if state == ST_ASK_HOLE:
-        if text_lower in {"skip", "no", "none", "n/a", "na", "-"}:
+        # Button reply: sel=="1" means the user tapped the only button ("Skip").
+        # Also accept typed variants so the flow stays forgiving.
+        is_skip = (sel == "1") or (text_lower in {"skip", "no", "none", "n/a", "na", "-"})
+        if is_skip:
             ctx["current_hole_size"] = None
         else:
             n = parse_first_number(text)
             if n is None or n <= 0:
-                await _safe_send(send_text(wa, phone,
-                                "I need a *number* (or type 'skip'). Please reply with the hole size in mm (e.g. 6 or 8)."),
-                                 phone, "bad_hole")
+                await _safe_send(send_buttons(
+                    wa, phone,
+                    body_text="I need a *number* — please reply with the hole size in mm (e.g. 6 or 8), or tap *Skip*.",
+                    buttons=["Skip"],
+                ), phone, "bad_hole")
                 return {"state": ST_ASK_HOLE, "customer_phone": phone, "actions_taken": ["bad_hole"]}
             ctx["current_hole_size"] = n
         ok, top = await _send_variant_matches(
