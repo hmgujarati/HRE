@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -53,6 +54,7 @@ ST_ASK_NAME = "ask_name"
 ST_ASK_EMAIL = "ask_email"
 ST_ASK_COMPANY = "ask_company"
 ST_ASK_STATE = "ask_state"
+ST_ASK_STATE_OTHER = "ask_state_other"
 ST_PICK_MATERIAL = "pick_material"
 ST_PICK_FAMILY = "pick_family"
 ST_ASK_CABLE = "ask_cable"
@@ -64,6 +66,43 @@ ST_REVIEW_CART = "review_cart"
 ST_REMOVE_ITEM = "remove_item"
 ST_FINALIZED = "finalized"
 ST_HUMAN_HANDOFF = "human_handoff"
+
+
+# Top-10 list of state quick-picks for the WhatsApp ASK_STATE prompt.
+# WhatsApp interactive lists have a 10-row total limit, so we surface the
+# most common HRE customer states + an "Other state…" escape hatch that
+# falls back to free-text entry.
+STATE_QUICK_PICKS: List[Dict[str, str]] = [
+    {"id": "gj", "title": "Gujarat", "description": "CGST + SGST (intra-state)"},
+    {"id": "mh", "title": "Maharashtra", "description": "IGST"},
+    {"id": "dl", "title": "Delhi", "description": "IGST"},
+    {"id": "ka", "title": "Karnataka", "description": "IGST"},
+    {"id": "tn", "title": "Tamil Nadu", "description": "IGST"},
+    {"id": "up", "title": "Uttar Pradesh", "description": "IGST"},
+    {"id": "rj", "title": "Rajasthan", "description": "IGST"},
+    {"id": "wb", "title": "West Bengal", "description": "IGST"},
+    {"id": "tg", "title": "Telangana", "description": "IGST"},
+    {"id": "other", "title": "Other state…", "description": "Type your state name"},
+]
+
+
+def _state_picks_by_id() -> Dict[str, str]:
+    return {p["id"]: p["title"] for p in STATE_QUICK_PICKS}
+
+
+async def _send_state_picker(wa: dict, phone: str, prompt: str = "Which state are you in?") -> None:
+    """Send the WhatsApp interactive list of state quick-picks. Used both for
+    the new-customer onboarding flow and the returning-customer refill flow."""
+    await _safe_send(send_list(
+        wa, phone,
+        body_text=f"{prompt}\nWe use this for GST: Gujarat → CGST + SGST, others → IGST.",
+        button_text="Pick state",
+        sections=[{
+            "title": "Select your state",
+            "id": "states",
+            "rows": [{"id": p["id"], "title": p["title"], "description": p["description"]} for p in STATE_QUICK_PICKS],
+        }],
+    ), phone, "ask_state_list")
 
 
 def _now_dt():
@@ -814,11 +853,17 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
                 if missing:
                     # Jump to the first missing field's prompt
                     first = missing[0]
+                    if first == "state":
+                        # Use the WA list picker for state (consistent with onboarding)
+                        await _send_state_picker(wa, phone, prompt="Welcome back! Tap your state:")
+                        await _save_session(db, phone_norm, ST_ASK_STATE, ctx,
+                                            {"in": text, "at": _now_dt().isoformat(), "out": "refill_state"})
+                        actions.append("returning_customer_missing_state")
+                        return {"state": ST_ASK_STATE, "customer_phone": phone, "actions_taken": actions}
                     next_state, prompt = {
                         "name":    (ST_ASK_NAME,    "Welcome back! Quick check — what's your full name?"),
                         "email":   (ST_ASK_EMAIL,   "Welcome back! What's your email address?"),
                         "company": (ST_ASK_COMPANY, "Welcome back! What's your company name?"),
-                        "state":   (ST_ASK_STATE,   "Welcome back! Which state are you in? (Used to calculate GST.)"),
                     }[first]
                     await _safe_send(send_text(wa, phone, prompt), phone, f"refill_{first}")
                     await _save_session(db, phone_norm, next_state, ctx,
@@ -889,26 +934,64 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
                              phone, "bad_company")
             return {"state": ST_ASK_COMPANY, "customer_phone": phone, "actions_taken": ["bad_company"]}
         ctx["customer"]["company"] = company
-        await _safe_send(send_text(wa, phone,
-                        "Which state are you in? (Used to calculate GST — CGST+SGST within Gujarat, IGST otherwise.)\nExample: Gujarat, Maharashtra, Karnataka"),
-                         phone, "ask_state")
+        await _send_state_picker(wa, phone)
         await _save_session(db, phone_norm, ST_ASK_STATE, ctx,
-                            {"in": text, "at": _now_dt().isoformat(), "out": "ask_state"})
+                            {"in": text, "at": _now_dt().isoformat(), "out": "ask_state_list"})
         return {"state": ST_ASK_STATE, "customer_phone": phone, "actions_taken": ["captured_company"]}
 
     if state == ST_ASK_STATE:
-        st = text.strip()
-        if not st or len(st) < 3:
+        # User tapped a row in the state list → resolve selection_id back to title.
+        picks = _state_picks_by_id()
+        chosen_state = None
+        if sel and sel in picks and sel != "other":
+            chosen_state = picks[sel]
+        elif sel == "other":
             await _safe_send(send_text(wa, phone,
-                            "Please type your state name (e.g. Gujarat, Maharashtra)."),
-                             phone, "bad_state")
+                            "Please type your state name (e.g. Bihar, Punjab, Kerala)."),
+                             phone, "ask_state_other")
+            await _save_session(db, phone_norm, ST_ASK_STATE_OTHER, ctx,
+                                {"in": text, "at": _now_dt().isoformat(), "out": "ask_state_other"})
+            return {"state": ST_ASK_STATE_OTHER, "customer_phone": phone, "actions_taken": ["ask_state_other"]}
+        elif text and text.strip().lower() in {p["title"].lower() for p in STATE_QUICK_PICKS if p["id"] != "other"}:
+            # Tolerate users who type the state name instead of tapping.
+            chosen_state = next(p["title"] for p in STATE_QUICK_PICKS if p["title"].lower() == text.strip().lower())
+        else:
+            # Re-prompt with the list.
+            await _send_state_picker(wa, phone, prompt="Please tap your state from the list:")
             return {"state": ST_ASK_STATE, "customer_phone": phone, "actions_taken": ["bad_state"]}
-        ctx["customer"]["state"] = st.title()
-        # Persist new contact (idempotent against repeat sessions)
+        # Capture and route into material picker
+        ctx["customer"]["state"] = chosen_state
         existing = await _find_contact_by_phone(db, phone_norm)
         if not existing:
             await db.contacts.insert_one({
-                "id": __import__("uuid").uuid4().hex,
+                "id": uuid.uuid4().hex,
+                "name": ctx["customer"]["name"],
+                "email": ctx["customer"]["email"],
+                "company": ctx["customer"]["company"],
+                "state": ctx["customer"]["state"],
+                "phone": phone,
+                "phone_norm": phone_norm,
+                "created_at": _now_dt().isoformat(),
+                "source": "whatsapp_bot",
+            })
+        await _safe_send(send_text(wa, phone, f"Got it, {ctx['customer']['name']}. Let's pick the products you need."),
+                         phone, "captured_state")
+        new_state = await _enter_material_picker(ctx)
+        return {"state": new_state, "customer_phone": phone, "actions_taken": ["captured_state"]}
+
+    if state == ST_ASK_STATE_OTHER:
+        st = (text or "").strip()
+        if not st or len(st) < 3:
+            await _safe_send(send_text(wa, phone,
+                            "Please type your state name (e.g. Bihar, Punjab, Kerala)."),
+                             phone, "bad_state_other")
+            return {"state": ST_ASK_STATE_OTHER, "customer_phone": phone, "actions_taken": ["bad_state_other"]}
+        chosen_state = st.title()
+        ctx["customer"]["state"] = chosen_state
+        existing = await _find_contact_by_phone(db, phone_norm)
+        if not existing:
+            await db.contacts.insert_one({
+                "id": uuid.uuid4().hex,
                 "name": ctx["customer"]["name"],
                 "email": ctx["customer"]["email"],
                 "company": ctx["customer"]["company"],
