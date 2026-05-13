@@ -514,6 +514,7 @@ function SmtpTab({ canEdit }) {
 function CatalogTab({ canEdit }) {
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     api.get("/settings/integrations").then((r) => setData(r.data)).catch(() => setData({ catalog: { hide_empty_families: false } }));
@@ -525,11 +526,27 @@ function CatalogTab({ canEdit }) {
     try {
       const r = await api.put("/settings/integrations", { catalog: { hide_empty_families: next } });
       setData(r.data);
-      toast.success(next ? "Empty families will be hidden from public catalogue" : "All active families will be shown");
+      toast.success(next
+        ? "Auto-sync ON — families with no active variants will be marked inactive"
+        : "Auto-sync OFF — family active state will no longer change automatically");
     } catch (e) {
       toast.error(formatApiError(e?.response?.data?.detail) || "Failed");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const runSync = async () => {
+    if (!canEdit) return;
+    setSyncing(true);
+    try {
+      const r = await api.post("/pricing/sync-family-active");
+      const { deactivated, reactivated, scanned } = r.data || {};
+      toast.success(`Synced ${scanned} families · ${deactivated} deactivated · ${reactivated} reactivated`);
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail) || "Sync failed");
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -539,15 +556,15 @@ function CatalogTab({ canEdit }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       <div className="border border-zinc-200 bg-white p-6">
-        <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">Public Catalogue</div>
-        <h3 className="font-heading font-black text-lg mb-1">Hide families with no active variants</h3>
+        <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">Catalogue Auto-Sync</div>
+        <h3 className="font-heading font-black text-lg mb-1">Auto-deactivate empty families</h3>
         <p className="text-xs text-zinc-500 mb-5">
-          When enabled, any product family whose variants are <em>all</em> inactive (e.g. after using "Deactivate Priceless" on the Pricing Chart) will be hidden from the public catalogue and the smart variant search. Admin views are unaffected.
+          When ON, the system will flip a product family's <span className="font-mono">active</span> flag to <span className="font-mono">false</span> as soon as all its variants are inactive (e.g. after "Deactivate Priceless"), and back to <span className="font-mono">true</span> when at least one variant is reactivated. Inactive families don't show on the public catalogue or the smart variant search. Admin views always show everything.
         </p>
 
         <label className="flex items-center justify-between gap-4 border border-zinc-300 px-4 py-3 cursor-pointer select-none">
           <span className="text-sm font-medium text-[#1A1A1A]">
-            {enabled ? "Hide empty families" : "Show all active families"}
+            {enabled ? "Auto-sync ON" : "Auto-sync OFF"}
           </span>
           <button
             type="button"
@@ -561,8 +578,19 @@ function CatalogTab({ canEdit }) {
           </button>
         </label>
 
-        <div className="text-[11px] text-zinc-500 mt-3">
-          Current state: <span className={`font-bold ${enabled ? 'text-emerald-700' : 'text-zinc-700'}`}>{enabled ? 'ON · Empty families hidden' : 'OFF · All active families visible'}</span>
+        <div className="mt-4 pt-4 border-t border-zinc-200">
+          <div className="text-xs text-zinc-600 mb-3">
+            Run a one-shot pass over every family to re-evaluate its <span className="font-mono">active</span> flag against its variants. Useful after bulk imports or when you want to backfill the state — works even when auto-sync is OFF.
+          </div>
+          <button
+            type="button"
+            onClick={runSync}
+            disabled={!canEdit || syncing}
+            data-testid="catalog-sync-now-btn"
+            className="border border-[#1A1A1A] text-[#1A1A1A] hover:bg-[#1A1A1A] hover:text-white font-bold uppercase tracking-wider text-xs px-4 py-2.5 transition-colors disabled:opacity-50"
+          >
+            {syncing ? "Syncing…" : "Sync family active state now"}
+          </button>
         </div>
       </div>
     </div>

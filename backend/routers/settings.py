@@ -125,7 +125,13 @@ async def update_integrations(data: IntegrationsIn, request: Request, _: dict = 
             sm_in["password"] = cur["smtp"].get("password", "")
         cur["smtp"] = {**cur["smtp"], **sm_in}
     if data.catalog is not None:
+        prev_hide = bool((cur.get("catalog") or {}).get("hide_empty_families"))
         cur["catalog"] = {**cur.get("catalog", {}), **data.catalog.model_dump()}
+        new_hide = bool(cur["catalog"].get("hide_empty_families"))
+        # Lazy import to avoid circular dependency at module load.
+        if new_hide and not prev_hide:
+            from services.pricing import sync_family_active_state
+            await sync_family_active_state(force=True)
     cur["id"] = SETTINGS_DOC_ID
     cur["updated_at"] = now_iso()
     await db.settings.update_one({"id": SETTINGS_DOC_ID}, {"$set": cur}, upsert=True)

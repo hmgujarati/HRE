@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from core import (
     ProductVariantIn, calc_final_price, db, get_current_user, now_iso, require_role,
 )
-from services.pricing import record_price_history
+from services.pricing import record_price_history, sync_family_active_state
 
 router = APIRouter()
 
@@ -60,6 +60,7 @@ async def create_variant(data: ProductVariantIn,
     await db.product_variants.insert_one(doc.copy())
     doc.pop("_id", None)
     await record_price_history({}, doc, user["email"], "Variant created")
+    await sync_family_active_state([doc["product_family_id"]])
     return doc
 
 
@@ -78,14 +79,20 @@ async def update_variant(vid: str, data: ProductVariantIn,
     await db.product_variants.update_one({"id": vid}, {"$set": upd})
     after = await db.product_variants.find_one({"id": vid}, {"_id": 0})
     await record_price_history(before, after, user["email"], "Variant updated")
+    fam_ids = list({before.get("product_family_id"), after.get("product_family_id")} - {None})
+    if fam_ids:
+        await sync_family_active_state(fam_ids)
     return after
 
 
 @router.delete("/product-variants/{vid}")
 async def delete_variant(vid: str, user: dict = Depends(require_role("admin"))):
+    before = await db.product_variants.find_one({"id": vid}, {"_id": 0, "product_family_id": 1})
     res = await db.product_variants.delete_one({"id": vid})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Variant not found")
+    if before and before.get("product_family_id"):
+        await sync_family_active_state([before["product_family_id"]])
     return {"ok": True}
 
 

@@ -250,16 +250,6 @@ async def public_catalogue():
     fams = await db.product_families.find({"active": True}, {"_id": 0}).sort("family_name", 1).to_list(500)
     mats = await db.materials.find({"active": True}, {"_id": 0}).to_list(50)
     cats = await db.categories.find({"active": True}, {"_id": 0}).to_list(500)
-    # Optional: hide families whose every variant is inactive (admin-controlled).
-    cur = await _get_integrations()
-    if (cur.get("catalog") or {}).get("hide_empty_families"):
-        fam_ids = [f["id"] for f in fams]
-        with_active = await db.product_variants.distinct(
-            "product_family_id",
-            {"product_family_id": {"$in": fam_ids}, "active": True},
-        )
-        keep = set(with_active)
-        fams = [f for f in fams if f["id"] in keep]
     return {"families": fams, "materials": mats, "categories": cats}
 
 
@@ -269,11 +259,6 @@ async def public_family(fid: str):
     if not fam:
         raise HTTPException(status_code=404, detail="Family not found")
     variants = await db.product_variants.find({"product_family_id": fid, "active": True}, {"_id": 0}).to_list(2000)
-    # Optional: 404 a family with zero active variants when hide-empty setting is on.
-    if not variants:
-        cur = await _get_integrations()
-        if (cur.get("catalog") or {}).get("hide_empty_families"):
-            raise HTTPException(status_code=404, detail="Family not found")
     return {"family": fam, "variants": [_strip_pricing_fields(v) for v in variants]}
 
 

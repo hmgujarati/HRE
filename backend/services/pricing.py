@@ -77,6 +77,54 @@ async def apply_bulk_discount(query: Dict[str, Any], discount: float,
     return count
 
 
+async def sync_family_active_state(family_ids: list[str] | None = None,
+                                    force: bool = False) -> Dict[str, Any]:
+    """When `catalog.hide_empty_families` is ON, mirror each family's `active`
+    flag to whether it has at least one active variant:
+      - All variants inactive → set family.active = False
+      - At least one variant active → set family.active = True
+    `family_ids=None` syncs every family; pass a list to sync only those.
+    `force=True` runs the sync regardless of the setting (used by the manual
+    "Sync now" admin button).
+    Returns: {deactivated, reactivated, scanned, enabled}.
+    """
+    # Local import to avoid circular dep (integrations -> pricing not needed,
+    # but pricing -> integrations is fine; doing it lazily keeps imports clean).
+    from services.integrations import get_integrations
+    cur = await get_integrations()
+    enabled = bool((cur.get("catalog") or {}).get("hide_empty_families"))
+    if not enabled and not force:
+        return {"deactivated": 0, "reactivated": 0, "scanned": 0, "enabled": False}
+
+    query: Dict[str, Any] = {}
+    if family_ids is not None:
+        if not family_ids:
+            return {"deactivated": 0, "reactivated": 0, "scanned": 0, "enabled": enabled}
+        query = {"id": {"$in": family_ids}}
+    families = await db.product_families.find(query, {"_id": 0, "id": 1, "active": 1}).to_list(5000)
+    deactivated = 0
+    reactivated = 0
+    for f in families:
+        has_active = await db.product_variants.count_documents(
+            {"product_family_id": f["id"], "active": True}
+        ) > 0
+        currently_active = bool(f.get("active", True))
+        if has_active and not currently_active:
+            await db.product_families.update_one(
+                {"id": f["id"]},
+                {"$set": {"active": True, "updated_at": now_iso()}},
+            )
+            reactivated += 1
+        elif (not has_active) and currently_active:
+            await db.product_families.update_one(
+                {"id": f["id"]},
+                {"$set": {"active": False, "updated_at": now_iso()}},
+            )
+            deactivated += 1
+    return {"deactivated": deactivated, "reactivated": reactivated,
+            "scanned": len(families), "enabled": enabled}
+
+
 # ─────────────────── Excel parsing helpers ───────────────────
 
 def norm(s: Any) -> str:

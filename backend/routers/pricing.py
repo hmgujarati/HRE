@@ -12,6 +12,7 @@ from core import (
 from services.pricing import (
     apply_bulk_discount, classify_header, is_number, norm_code,
     parse_price_workbook, parse_variant_workbook, record_price_history,
+    sync_family_active_state,
 )
 
 router = APIRouter()
@@ -89,13 +90,25 @@ async def toggle_priceless(user: dict = Depends(require_role("admin", "manager")
             {**priceless_q, "active": True},
             {"$set": {"active": False, "updated_at": now_iso()}},
         )
-        return {"action": "deactivated", "count": res.modified_count, "total_priceless": total}
+        sync_summary = await sync_family_active_state()
+        return {"action": "deactivated", "count": res.modified_count,
+                "total_priceless": total, "family_sync": sync_summary}
     # All priceless variants are already inactive — reactivate them.
     res = await db.product_variants.update_many(
         {**priceless_q, "active": False},
         {"$set": {"active": True, "updated_at": now_iso()}},
     )
-    return {"action": "reactivated", "count": res.modified_count, "total_priceless": total}
+    sync_summary = await sync_family_active_state()
+    return {"action": "reactivated", "count": res.modified_count,
+            "total_priceless": total, "family_sync": sync_summary}
+
+
+@router.post("/pricing/sync-family-active")
+async def sync_family_active(_: dict = Depends(require_role("admin", "manager"))):
+    """One-shot backfill: re-evaluate every family's `active` flag against its
+    variants. Runs even if the `catalog.hide_empty_families` setting is OFF
+    (force=True) so admins can use it as a manual cleanup tool."""
+    return await sync_family_active_state(force=True)
 
 
 @router.get("/pricing/priceless-count")
