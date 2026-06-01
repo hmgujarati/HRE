@@ -676,6 +676,18 @@ def _public_order_summary(order: dict) -> dict:
         })
     proforma = order.get("proforma") or {}
     docs = order.get("documents") or {}
+    # Phase-1: per-line dispatch tracking surfaced to the customer.
+    line_status: List[Dict[str, Any]] = []
+    for li in (order.get("line_items") or []):
+        line_status.append({
+            "product_code": li.get("product_code") or "",
+            "family_name": li.get("family_name") or "",
+            "description": li.get("description") or "",
+            "quantity": li.get("quantity"),
+            "unit": li.get("unit") or "",
+            "qty_status": li.get("qty_status") or "pending",
+            "expected_dispatch_date": li.get("expected_dispatch_date") or "",
+        })
     return {
         "order_number": order.get("order_number"),
         "stage": stage,
@@ -697,6 +709,7 @@ def _public_order_summary(order: dict) -> dict:
         "po_instructions": (docs.get("po") or {}).get("customer_instructions") or "",
         "expected_completion_date": order.get("expected_completion_date") or "",
         "updated_at": order.get("updated_at"),
+        "line_status": line_status,
     }
 
 

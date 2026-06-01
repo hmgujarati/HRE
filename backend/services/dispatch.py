@@ -91,6 +91,35 @@ def merge_pdfs_for_dispatch(order_id: str, paths: List[Path]) -> Optional[Dict[s
     }
 
 
+# ─────────────────── Per-line dispatch tracking constants ───────────────────
+
+LINE_QTY_STATUSES = [
+    ("pending", "Pending"),
+    ("in_production", "In Production"),
+    ("ready", "Ready"),
+    ("packed", "Packed"),
+    ("shipped", "Shipped"),
+    ("delivered", "Delivered"),
+]
+LINE_QTY_STATUS_KEYS = [k for k, _ in LINE_QTY_STATUSES]
+LINE_QTY_STATUS_LABEL = dict(LINE_QTY_STATUSES)
+
+
+def normalize_line_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Ensure every line item carries the Phase-1 tracking fields. Idempotent:
+    safe to call on legacy line items missing these keys."""
+    out = []
+    for li in items or []:
+        out.append({
+            **li,
+            "qty_status": li.get("qty_status") or "pending",
+            "expected_dispatch_date": li.get("expected_dispatch_date") or None,
+            "internal_notes": li.get("internal_notes") or "",
+            "status_updated_at": li.get("status_updated_at") or None,
+        })
+    return out
+
+
 # ─────────────────── Order pipeline constants ───────────────────
 
 ORDER_STAGES = [
@@ -196,7 +225,7 @@ def mint_order_from_quote(quote: dict, user_email: str, po_number: Optional[str]
         "billing_address": quote.get("billing_address"),
         "shipping_address": quote.get("shipping_address"),
         "place_of_supply": quote.get("place_of_supply"),
-        "line_items": quote.get("line_items") or [],
+        "line_items": normalize_line_items(quote.get("line_items") or []),
         "taxable_value": quote.get("taxable_value"),
         "total_gst": quote.get("total_gst"),
         "total_discount": quote.get("total_discount"),

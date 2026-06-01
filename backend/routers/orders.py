@@ -11,11 +11,12 @@ from pydantic import BaseModel
 
 from core import PUBLIC_BASE_URL, UPLOAD_DIR, db, get_current_user, now_iso, require_role
 from services.dispatch import (
-    AUTO_NOTIFY_STAGES, ORDER_STAGES, STAGE_ORDER, STAGE_REQUIRED_DOCS,
-    STAGE_TO_LABEL, _now_dt, mint_order_from_quote, missing_required_docs,
-    next_invoice_number, next_order_number, next_pi_number, order_auto_notify,
-    notify_production_update, persist_order_notification, save_order_doc,
-    timeline_event,
+    AUTO_NOTIFY_STAGES, LINE_QTY_STATUS_KEYS, LINE_QTY_STATUS_LABEL,
+    ORDER_STAGES, STAGE_ORDER, STAGE_REQUIRED_DOCS, STAGE_TO_LABEL,
+    _now_dt, mint_order_from_quote, missing_required_docs,
+    next_invoice_number, next_order_number, next_pi_number,
+    normalize_line_items, order_auto_notify, notify_production_update,
+    persist_order_notification, save_order_doc, timeline_event,
 )
 
 router = APIRouter()
@@ -77,12 +78,79 @@ async def list_orders(
     return await db.orders.find(query, {"_id": 0}).sort("created_at", -1).limit(200).to_list(length=200)
 
 
+class LineItemPatchIn(BaseModel):
+    qty_status: Optional[str] = None
+    expected_dispatch_date: Optional[str] = None  # ISO "YYYY-MM-DD" or null/"" to clear
+    internal_notes: Optional[str] = None
+
+
 @router.get("/orders/{oid}")
 async def get_order(oid: str, _: dict = Depends(require_role("admin", "manager"))):
     order = await db.orders.find_one({"id": oid}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    # Normalise legacy line items missing the Phase-1 tracking fields so the
+    # frontend always sees `qty_status` / `expected_dispatch_date` / etc.
+    items = order.get("line_items") or []
+    normalised = normalize_line_items(items)
+    if any(li.get("qty_status") != (orig.get("qty_status") or "pending")
+           for li, orig in zip(normalised, items)):
+        await db.orders.update_one({"id": oid}, {"$set": {"line_items": normalised}})
+        order["line_items"] = normalised
+    else:
+        order["line_items"] = normalised
     return order
+
+
+@router.patch("/orders/{oid}/lines/{line_idx}")
+async def update_order_line(
+    oid: str, line_idx: int, data: LineItemPatchIn,
+    user: dict = Depends(require_role("admin", "manager")),
+):
+    """Update Phase-1 tracking fields on a single line item by 0-based index.
+    Persists a timeline event so the change is auditable."""
+    order = await db.orders.find_one({"id": oid}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    items = normalize_line_items(order.get("line_items") or [])
+    if line_idx < 0 or line_idx >= len(items):
+        raise HTTPException(status_code=404, detail="Line item not found")
+    li = dict(items[line_idx])
+    changes: List[str] = []
+
+    if data.qty_status is not None:
+        if data.qty_status not in LINE_QTY_STATUS_KEYS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown status '{data.qty_status}'. Allowed: {', '.join(LINE_QTY_STATUS_KEYS)}",
+            )
+        if li.get("qty_status") != data.qty_status:
+            changes.append(
+                f"status: {LINE_QTY_STATUS_LABEL.get(li.get('qty_status') or 'pending')} → "
+                f"{LINE_QTY_STATUS_LABEL[data.qty_status]}"
+            )
+        li["qty_status"] = data.qty_status
+        li["status_updated_at"] = now_iso()
+    if data.expected_dispatch_date is not None:
+        new_date = (data.expected_dispatch_date or "").strip() or None
+        if new_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", new_date):
+            raise HTTPException(status_code=400, detail="Date must be YYYY-MM-DD")
+        if li.get("expected_dispatch_date") != new_date:
+            changes.append(f"ETA: {li.get('expected_dispatch_date') or '—'} → {new_date or '—'}")
+        li["expected_dispatch_date"] = new_date
+    if data.internal_notes is not None:
+        li["internal_notes"] = data.internal_notes.strip()
+
+    items[line_idx] = li
+    label = li.get("product_code") or li.get("family_name") or f"Line {line_idx + 1}"
+    summary = f"{label}: " + " · ".join(changes) if changes else f"{label}: notes updated"
+    ev = timeline_event("line_update", summary, user["email"],
+                        line_idx=line_idx, product_code=li.get("product_code") or "")
+    await db.orders.update_one(
+        {"id": oid},
+        {"$set": {"line_items": items, "updated_at": now_iso()}, "$push": {"timeline": ev}},
+    )
+    return await db.orders.find_one({"id": oid}, {"_id": 0})
 
 
 @router.post("/orders/{oid}/advance")

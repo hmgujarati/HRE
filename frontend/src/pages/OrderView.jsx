@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import {
   ArrowLeft, FileArrowUp, FileText, Package, Truck, ClipboardText,
   CheckCircle, Clock, PaperPlaneTilt, ArrowRight, FileArrowDown, WhatsappLogo,
-  ArrowClockwise, EnvelopeSimple,
+  ArrowClockwise, EnvelopeSimple, Calendar, PencilSimple, FloppyDisk, X,
 } from "@phosphor-icons/react";
 import { StageBadge, STAGE_LABELS, STAGE_ORDER } from "./Orders";
 
@@ -137,6 +137,8 @@ export default function OrderView() {
           <ContactCard order={order} />
 
           <ExpectedCompletionEditor order={order} onSave={saveExpectedCompletion} busy={busy} />
+
+          <LineItemsPanel order={order} onReload={load} />
 
           <StageActions
             order={order}
@@ -582,5 +584,162 @@ function UploadAction({ label, orderId, path, extraFields = [], fileLabel, fileF
         <button onClick={submit} disabled={busy} className={`flex-1 ${color} text-white text-xs font-bold uppercase tracking-wider py-2 disabled:opacity-50`} data-testid={`upload-${path}-submit`}>{busy ? "Uploading…" : "Upload"}</button>
       </div>
     </div>
+  );
+}
+
+
+// ─────────────────── Per-line tracking panel (Phase 1) ───────────────────
+
+const LINE_STATUSES = [
+  { key: "pending",       label: "Pending",        color: "bg-zinc-200 text-zinc-700" },
+  { key: "in_production", label: "In Production",  color: "bg-amber-200 text-amber-900" },
+  { key: "ready",         label: "Ready",          color: "bg-blue-200 text-blue-900" },
+  { key: "packed",        label: "Packed",         color: "bg-indigo-200 text-indigo-900" },
+  { key: "shipped",       label: "Shipped",        color: "bg-purple-200 text-purple-900" },
+  { key: "delivered",     label: "Delivered",      color: "bg-emerald-200 text-emerald-900" },
+];
+const STATUS_COLOR = Object.fromEntries(LINE_STATUSES.map((s) => [s.key, s.color]));
+const STATUS_LABEL = Object.fromEntries(LINE_STATUSES.map((s) => [s.key, s.label]));
+
+function LineItemsPanel({ order, onReload }) {
+  const items = order.line_items || [];
+  if (!items.length) return null;
+  return (
+    <div className="border border-zinc-200 bg-white" data-testid="line-items-panel">
+      <div className="px-5 py-4 border-b border-zinc-200 flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Per-Item Tracking</div>
+          <h3 className="font-heading font-black text-lg">Line Items</h3>
+          <div className="text-xs text-zinc-500">Set status and dispatch date for each product. Customer sees this in their portal.</div>
+        </div>
+        <div className="text-xs text-zinc-500 font-mono">{items.length} {items.length === 1 ? "item" : "items"}</div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-zinc-500 font-bold">
+            <tr>
+              <th className="px-4 py-3 text-left">Product</th>
+              <th className="px-4 py-3 text-left">Qty</th>
+              <th className="px-4 py-3 text-left">Status</th>
+              <th className="px-4 py-3 text-left">Expected Dispatch</th>
+              <th className="px-4 py-3 text-left">Internal Notes</th>
+              <th className="px-4 py-3"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((li, idx) => (
+              <LineItemRow key={`${li.product_code || idx}-${idx}`} order={order} item={li} idx={idx} onReload={onReload} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function LineItemRow({ order, item, idx, onReload }) {
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState(item.qty_status || "pending");
+  const [dispatchDate, setDispatchDate] = useState(item.expected_dispatch_date || "");
+  const [notes, setNotes] = useState(item.internal_notes || "");
+
+  const reset = () => {
+    setStatus(item.qty_status || "pending");
+    setDispatchDate(item.expected_dispatch_date || "");
+    setNotes(item.internal_notes || "");
+    setEditing(false);
+  };
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.patch(`/orders/${order.id}/lines/${idx}`, {
+        qty_status: status,
+        expected_dispatch_date: dispatchDate || null,
+        internal_notes: notes,
+      });
+      toast.success(`${item.product_code || "Line"} updated`);
+      setEditing(false);
+      onReload();
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const color = STATUS_COLOR[item.qty_status || "pending"] || STATUS_COLOR.pending;
+  const label = STATUS_LABEL[item.qty_status || "pending"] || "Pending";
+
+  return (
+    <tr className="border-t border-zinc-100" data-testid={`line-row-${idx}`}>
+      <td className="px-4 py-3 align-top">
+        <div className="font-mono text-xs font-bold text-[#1A1A1A]">{item.product_code || `Line ${idx + 1}`}</div>
+        <div className="text-xs text-zinc-500 mt-0.5">{item.family_name || item.description || ""}</div>
+      </td>
+      <td className="px-4 py-3 align-top font-mono text-xs">
+        {item.quantity}{item.unit ? ` ${item.unit}` : ""}
+      </td>
+      <td className="px-4 py-3 align-top">
+        {editing ? (
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            className="border border-zinc-300 px-2 py-1 text-xs"
+            data-testid={`line-status-select-${idx}`}
+          >
+            {LINE_STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </select>
+        ) : (
+          <span className={`inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-1 ${color}`}>{label}</span>
+        )}
+      </td>
+      <td className="px-4 py-3 align-top">
+        {editing ? (
+          <input
+            type="date"
+            value={dispatchDate}
+            onChange={(e) => setDispatchDate(e.target.value)}
+            className="border border-zinc-300 px-2 py-1 text-xs"
+            data-testid={`line-date-input-${idx}`}
+          />
+        ) : (
+          <span className="text-xs text-zinc-700 font-mono inline-flex items-center gap-1">
+            <Calendar size={12} weight="bold" className="text-zinc-400" />
+            {item.expected_dispatch_date || "—"}
+          </span>
+        )}
+      </td>
+      <td className="px-4 py-3 align-top max-w-xs">
+        {editing ? (
+          <input
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Internal only"
+            className="border border-zinc-300 px-2 py-1 text-xs w-full"
+            data-testid={`line-notes-input-${idx}`}
+          />
+        ) : (
+          <span className="text-xs text-zinc-600 line-clamp-2">{item.internal_notes || "—"}</span>
+        )}
+      </td>
+      <td className="px-4 py-3 align-top text-right">
+        {editing ? (
+          <div className="flex gap-1 justify-end">
+            <button onClick={save} disabled={busy} data-testid={`line-save-${idx}`} className="bg-[#FBAE17] hover:bg-[#E59D12] text-black text-[10px] font-bold uppercase tracking-wider px-2 py-1 flex items-center gap-1 disabled:opacity-50">
+              <FloppyDisk size={11} weight="bold" /> {busy ? "…" : "Save"}
+            </button>
+            <button onClick={reset} disabled={busy} data-testid={`line-cancel-${idx}`} className="border border-zinc-300 text-[10px] font-bold uppercase tracking-wider px-2 py-1 flex items-center gap-1 hover:bg-zinc-100">
+              <X size={11} weight="bold" /> Cancel
+            </button>
+          </div>
+        ) : (
+          <button onClick={() => setEditing(true)} data-testid={`line-edit-${idx}`} className="text-zinc-500 hover:text-[#FBAE17] inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider">
+            <PencilSimple size={11} weight="bold" /> Edit
+          </button>
+        )}
+      </td>
+    </tr>
   );
 }

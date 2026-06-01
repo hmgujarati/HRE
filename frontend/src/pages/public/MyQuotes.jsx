@@ -5,6 +5,7 @@ import { Phone, ArrowRight, FileText, SignOut, CaretDown, CaretRight, PaperPlane
 import { toast } from "sonner";
 import QuoteStatusBadge from "@/components/QuoteStatusBadge";
 import PublicTrackingStrip from "@/components/PublicTrackingStrip";
+import PublicLineItemStatus from "@/components/PublicLineItemStatus";
 import SubmitPoModal from "@/components/SubmitPoModal";
 
 export default function MyQuotes() {
@@ -171,8 +172,9 @@ export default function MyQuotes() {
                 )}
 
                 {hasOrder && isOpen && (
-                  <div className="border-t border-zinc-200 p-4 bg-zinc-50/40">
+                  <div className="border-t border-zinc-200 p-4 bg-zinc-50/40 space-y-4">
                     <PublicTrackingStrip order={q.order} />
+                    <PublicLineItemStatus order={q.order} />
                   </div>
                 )}
                 {!hasOrder && isOpen && (
