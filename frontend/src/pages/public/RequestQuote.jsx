@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
-import { ArrowRight, ShieldCheck, Trash, Phone, ShoppingCart, Check } from "@phosphor-icons/react";
+import { ArrowRight, ShieldCheck, Trash, Phone, ShoppingCart, Check, X } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import StateSelect from "@/components/StateSelect";
 
@@ -30,6 +30,33 @@ export default function RequestQuote() {
   const [busy, setBusy] = useState(false);
   const [savedQuote, setSavedQuote] = useState(null);
   const [devOtp, setDevOtp] = useState("");
+  const [signInOpen, setSignInOpen] = useState(false);
+
+  const onExistingCustomerLogin = async (sessionToken) => {
+    // Reuses the existing /public/me hydration path used at page-mount.
+    try {
+      const { data } = await api.get(`/public/me?token=${sessionToken}`);
+      if (!data?.contact) {
+        toast.error("Verified, but we couldn't find your saved profile. Please fill in your details below.");
+        return;
+      }
+      setDetails({
+        name: data.contact.name || "",
+        company: data.contact.company || "",
+        phone: data.contact.phone || "",
+        email: data.contact.email || "",
+        gst_number: data.contact.gst_number || "",
+        state: data.contact.state || "",
+        billing_address: data.contact.billing_address || "",
+        shipping_address: data.contact.shipping_address || "",
+      });
+      localStorage.setItem("hre_public_token", sessionToken);
+      setToken(sessionToken);
+      toast.success(`Welcome back, ${data.contact.name || data.contact.company || "valued customer"}.`);
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail) || "Sign-in failed");
+    }
+  };
 
   useEffect(() => { setCart(readCart()); }, []);
 
@@ -171,6 +198,12 @@ export default function RequestQuote() {
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
       <Stepper step={step} />
 
+      <SignInModal
+        open={signInOpen}
+        onClose={() => setSignInOpen(false)}
+        onSuccess={async (sessionToken) => { setSignInOpen(false); await onExistingCustomerLogin(sessionToken); }}
+      />
+
       {step === 1 && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Cart */}
@@ -205,9 +238,24 @@ export default function RequestQuote() {
 
           {/* Details */}
           <form onSubmit={submitDetailsAndSendOtp} className="border border-zinc-200 bg-white" data-testid="public-details-form">
-            <div className="px-5 py-4 border-b border-zinc-200 flex items-center gap-2">
+            <div className="px-5 py-4 border-b border-zinc-200 flex items-center gap-2 flex-wrap">
               <ShieldCheck size={18} weight="fill" className="text-[#FBAE17]" />
               <h3 className="font-heading font-black text-lg">Business Details</h3>
+              {!token && (
+                <button
+                  type="button"
+                  onClick={() => setSignInOpen(true)}
+                  data-testid="returning-customer-signin-btn"
+                  className="ml-auto text-[10px] uppercase tracking-wider font-bold text-[#FBAE17] hover:text-[#1A1A1A] border border-[#FBAE17] hover:bg-[#FBAE17] px-3 py-1.5 transition-colors flex items-center gap-1"
+                >
+                  <Phone size={11} weight="bold" /> Returning customer? Sign in
+                </button>
+              )}
+              {token && (
+                <span className="ml-auto text-[10px] uppercase tracking-wider font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 flex items-center gap-1">
+                  <Check size={11} weight="bold" /> Signed in · details prefilled
+                </span>
+              )}
             </div>
             <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
               <Input label="Name *" required value={details.name} onChange={(v) => setDetails({ ...details, name: v })} testId="public-name" />
@@ -410,6 +458,105 @@ function TextArea({ label, span, value, onChange }) {
     <div className={span ? "md:col-span-2" : ""}>
       <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-700 mb-1 block">{label}</label>
       <textarea rows={2} value={value} onChange={(e) => onChange(e.target.value)} className="w-full border border-zinc-300 px-3 py-2 text-sm" />
+    </div>
+  );
+}
+
+
+// ─────────────────── Returning-customer Sign-In Modal ───────────────────
+
+function SignInModal({ open, onClose, onSuccess }) {
+  const [stage, setStage] = useState("phone"); // "phone" | "otp"
+  const [phone, setPhone] = useState("");
+  const [requestId, setRequestId] = useState("");
+  const [emailHint, setEmailHint] = useState("");
+  const [otp, setOtp] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [devOtp, setDevOtp] = useState("");
+
+  useEffect(() => {
+    if (!open) {
+      // Reset on close so re-opening starts fresh
+      setStage("phone"); setPhone(""); setRequestId(""); setOtp(""); setDevOtp(""); setEmailHint("");
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const sendOtp = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const { data } = await api.post("/public/my-quotes/login/start", { phone });
+      setRequestId(data.request_id);
+      setEmailHint(data.email_hint || "");
+      if (data.dev_otp) setDevOtp(data.dev_otp);
+      setStage("otp");
+      toast.success("OTP sent — check WhatsApp" + (data.email_hint ? " & email" : ""));
+    } catch (err) {
+      toast.error(formatApiError(err?.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+  const verifyOtp = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/public/quote-requests/${requestId}/verify-otp`, { code: otp });
+      onSuccess(data.token);
+    } catch (err) {
+      toast.error(formatApiError(err?.response?.data?.detail) || "Incorrect OTP");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="signin-modal">
+      <div className="bg-white border border-zinc-200 w-full max-w-md">
+        <div className="px-5 py-4 border-b border-zinc-200 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Phone size={18} weight="fill" className="text-[#FBAE17]" />
+            <h3 className="font-heading font-black text-lg">Sign in to skip the form</h3>
+          </div>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-700" data-testid="signin-close-btn"><X size={18} weight="bold" /></button>
+        </div>
+
+        {stage === "phone" && (
+          <form onSubmit={sendOtp} className="p-5 space-y-4">
+            <p className="text-sm text-zinc-600">Enter the phone number you used on a previous quote. We'll WhatsApp you a 6-digit code to verify, then auto-fill your business details.</p>
+            <input
+              autoFocus required value={phone} onChange={(e) => setPhone(e.target.value)}
+              placeholder="+91 98xxx xxxxx"
+              className="w-full border border-zinc-300 px-4 py-3 text-sm font-mono focus:outline-none focus:border-[#FBAE17]"
+              data-testid="signin-phone-input"
+            />
+            <button type="submit" disabled={busy || !phone.trim()} data-testid="signin-send-otp-btn" className="w-full bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-sm py-3 flex items-center justify-center gap-2 disabled:opacity-60">
+              {busy ? "Sending…" : <>Send OTP <ArrowRight size={14} weight="bold" /></>}
+            </button>
+          </form>
+        )}
+
+        {stage === "otp" && (
+          <form onSubmit={verifyOtp} className="p-5 space-y-4">
+            <p className="text-sm text-zinc-600">Code sent to <span className="font-mono font-bold">{phone}</span>{emailHint ? <> and <span className="font-mono">{emailHint}</span></> : null}.</p>
+            {devOtp && (
+              <div className="bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">
+                <strong>Dev mode:</strong> code is <span className="font-mono font-bold">{devOtp}</span>
+              </div>
+            )}
+            <input
+              autoFocus maxLength={6} value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
+              placeholder="••••••"
+              className="w-full border border-zinc-300 px-4 py-3 text-2xl font-mono tracking-[0.5em] text-center focus:outline-none focus:border-[#FBAE17]"
+              data-testid="signin-otp-input"
+            />
+            <button type="submit" disabled={busy || otp.length !== 6} data-testid="signin-verify-btn" className="w-full bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-sm py-3 flex items-center justify-center gap-2 disabled:opacity-60">
+              {busy ? "Verifying…" : <>Verify & Sign In <ArrowRight size={14} weight="bold" /></>}
+            </button>
+            <button type="button" onClick={() => setStage("phone")} className="w-full text-xs uppercase tracking-wider font-bold text-zinc-500 hover:text-[#FBAE17]">Use a different number</button>
+          </form>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { Package, Calendar } from "@phosphor-icons/react";
+import { toDmy } from "@/lib/dates";
 
 const STATUS_STYLES = {
   pending:        { label: "Pending",        cls: "bg-zinc-100 text-zinc-700 border-zinc-300" },
@@ -10,9 +11,7 @@ const STATUS_STYLES = {
 };
 
 function formatDate(d) {
-  if (!d) return "";
-  try { return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); }
-  catch { return ""; }
+  return toDmy(d);
 }
 
 export default function PublicLineItemStatus({ order }) {

@@ -8,6 +8,7 @@ import {
   ArrowClockwise, EnvelopeSimple, Calendar, PencilSimple, FloppyDisk, X,
 } from "@phosphor-icons/react";
 import { StageBadge, STAGE_LABELS, STAGE_ORDER } from "./Orders";
+import { toDmy, fromDmy } from "@/lib/dates";
 
 const STAGE_ICONS = {
   pending_po: ClipboardText, po_received: FileText, proforma_issued: FileText,
@@ -340,13 +341,17 @@ function DocRow({ label, doc, number }) {
 
 function ExpectedCompletionEditor({ order, onSave, busy }) {
   const [editing, setEditing] = useState(false);
-  const [val, setVal] = useState(order.expected_completion_date || "");
-  useEffect(() => { setVal(order.expected_completion_date || ""); }, [order.expected_completion_date]);
-  const display = order.expected_completion_date
-    ? new Date(order.expected_completion_date + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
-    : "Not set";
+  const [val, setVal] = useState(toDmy(order.expected_completion_date || ""));
+  useEffect(() => { setVal(toDmy(order.expected_completion_date || "")); }, [order.expected_completion_date]);
+  const display = toDmy(order.expected_completion_date) || "Not set";
   const save = async () => {
-    await onSave(val);
+    let iso = "";
+    if (val.trim()) {
+      const parsed = fromDmy(val.trim());
+      if (!parsed) { toast.error("Date must be DD-MM-YYYY (e.g. 25-06-2026)"); return; }
+      iso = parsed;
+    }
+    await onSave(iso);
     setEditing(false);
   };
   return (
@@ -365,18 +370,19 @@ function ExpectedCompletionEditor({ order, onSave, busy }) {
           ) : (
             <div className="flex flex-wrap items-center gap-2">
               <input
-                type="date"
+                type="text"
                 value={val}
                 onChange={(e) => setVal(e.target.value)}
-                className="border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:border-[#FBAE17]"
+                placeholder="DD-MM-YYYY"
+                maxLength={10}
+                className="border border-zinc-300 px-3 py-2 text-sm font-mono w-36 focus:outline-none focus:border-[#FBAE17]"
                 data-testid="eta-input"
-                min={new Date().toISOString().slice(0, 10)}
               />
               <button onClick={save} disabled={busy} className="bg-[#FBAE17] hover:bg-[#E59D12] text-black text-xs uppercase tracking-wider font-bold px-3 py-2 disabled:opacity-50" data-testid="eta-save-btn">Save</button>
               {order.expected_completion_date && (
                 <button onClick={() => onSave("")} disabled={busy} className="text-xs uppercase tracking-wider font-bold text-red-500 hover:text-red-700 px-2" data-testid="eta-clear-btn">Clear</button>
               )}
-              <button onClick={() => { setEditing(false); setVal(order.expected_completion_date || ""); }} className="text-xs uppercase tracking-wider font-bold text-zinc-500 hover:text-black px-2">Cancel</button>
+              <button onClick={() => { setEditing(false); setVal(toDmy(order.expected_completion_date || "")); }} className="text-xs uppercase tracking-wider font-bold text-zinc-500 hover:text-black px-2">Cancel</button>
             </div>
           )}
         </div>
@@ -641,22 +647,32 @@ function LineItemRow({ order, item, idx, onReload }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(item.qty_status || "pending");
-  const [dispatchDate, setDispatchDate] = useState(item.expected_dispatch_date || "");
+  const [dispatchDate, setDispatchDate] = useState(toDmy(item.expected_dispatch_date || ""));
   const [notes, setNotes] = useState(item.internal_notes || "");
 
   const reset = () => {
     setStatus(item.qty_status || "pending");
-    setDispatchDate(item.expected_dispatch_date || "");
+    setDispatchDate(toDmy(item.expected_dispatch_date || ""));
     setNotes(item.internal_notes || "");
     setEditing(false);
   };
 
   const save = async () => {
+    // Convert DD-MM-YYYY → YYYY-MM-DD before sending. Empty stays empty.
+    let isoDate = "";
+    if (dispatchDate.trim()) {
+      const parsed = fromDmy(dispatchDate.trim());
+      if (!parsed) {
+        toast.error("Date must be in DD-MM-YYYY format (e.g. 25-06-2026)");
+        return;
+      }
+      isoDate = parsed;
+    }
     setBusy(true);
     try {
       await api.patch(`/orders/${order.id}/lines/${idx}`, {
         qty_status: status,
-        expected_dispatch_date: dispatchDate || null,
+        expected_dispatch_date: isoDate || null,
         internal_notes: notes,
       });
       toast.success(`${item.product_code || "Line"} updated`);
@@ -698,16 +714,18 @@ function LineItemRow({ order, item, idx, onReload }) {
       <td className="px-4 py-3 align-top">
         {editing ? (
           <input
-            type="date"
+            type="text"
             value={dispatchDate}
             onChange={(e) => setDispatchDate(e.target.value)}
-            className="border border-zinc-300 px-2 py-1 text-xs"
+            placeholder="DD-MM-YYYY"
+            maxLength={10}
+            className="border border-zinc-300 px-2 py-1 text-xs font-mono w-28"
             data-testid={`line-date-input-${idx}`}
           />
         ) : (
           <span className="text-xs text-zinc-700 font-mono inline-flex items-center gap-1">
             <Calendar size={12} weight="bold" className="text-zinc-400" />
-            {item.expected_dispatch_date || "—"}
+            {toDmy(item.expected_dispatch_date) || "—"}
           </span>
         )}
       </td>
