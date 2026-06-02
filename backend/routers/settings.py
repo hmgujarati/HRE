@@ -61,10 +61,17 @@ class CatalogSettingsIn(BaseModel):
     hide_empty_families: bool = False
 
 
+class UniversalUpdateSettingsIn(BaseModel):
+    template_doc: Optional[str] = None
+    template_text: Optional[str] = None
+    template_language: Optional[str] = None
+
+
 class IntegrationsIn(BaseModel):
     whatsapp: Optional[WhatsAppSettingsIn] = None
     smtp: Optional[SmtpSettingsIn] = None
     catalog: Optional[CatalogSettingsIn] = None
+    universal_update: Optional[UniversalUpdateSettingsIn] = None
 
 
 class WhatsAppTestIn(BaseModel):
@@ -132,6 +139,9 @@ async def update_integrations(data: IntegrationsIn, request: Request, _: dict = 
         if new_hide and not prev_hide:
             from services.pricing import sync_family_active_state
             await sync_family_active_state(force=True)
+    if data.universal_update is not None:
+        incoming = {k: v for k, v in data.universal_update.model_dump().items() if v is not None}
+        cur["universal_update"] = {**cur.get("universal_update", {}), **incoming}
     cur["id"] = SETTINGS_DOC_ID
     cur["updated_at"] = now_iso()
     await db.settings.update_one({"id": SETTINGS_DOC_ID}, {"$set": cur}, upsert=True)

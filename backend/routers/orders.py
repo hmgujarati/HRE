@@ -84,6 +84,48 @@ class LineItemPatchIn(BaseModel):
     internal_notes: Optional[str] = None
 
 
+class UniversalNotifyIn(BaseModel):
+    vars: List[str]                       # 5 body lines (variables {{2}}..{{6}})
+    attach: Optional[str] = "none"         # none|proforma|tax_invoice|eway|lr
+    preset_id: Optional[str] = None
+    also_email: bool = True
+
+
+@router.get("/notify/presets")
+async def list_notify_presets(_: dict = Depends(require_role("admin", "manager"))):
+    """Return the universal-update preset library so the admin UI can render the dropdown."""
+    from services.universal_update import PRESETS
+    return {"presets": PRESETS}
+
+
+@router.post("/orders/{oid}/notify")
+async def notify_customer(
+    oid: str, data: UniversalNotifyIn,
+    user: dict = Depends(require_role("admin", "manager")),
+):
+    """Send a universal-template WhatsApp (+ optional Email mirror) to the
+    customer for this order. Persists the send to the order's notifications log
+    so it appears in the audit timeline."""
+    from services.universal_update import (
+        ATTACH_CHOICES, log_universal_update, send_universal_update,
+    )
+    order = await db.orders.find_one({"id": oid}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    attach = (data.attach or "none").lower()
+    if attach not in ATTACH_CHOICES:
+        raise HTTPException(status_code=400, detail=f"Unknown attachment '{attach}'")
+    result = await send_universal_update(
+        order=order,
+        body_lines=list(data.vars or []),
+        attach_choice=attach,
+        preset_id=data.preset_id,
+        also_email=data.also_email,
+    )
+    await log_universal_update(oid, result, user["email"])
+    return result
+
+
 @router.get("/orders/{oid}")
 async def get_order(oid: str, _: dict = Depends(require_role("admin", "manager"))):
     order = await db.orders.find_one({"id": oid}, {"_id": 0})

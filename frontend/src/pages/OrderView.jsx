@@ -6,6 +6,7 @@ import {
   ArrowLeft, FileArrowUp, FileText, Package, Truck, ClipboardText,
   CheckCircle, Clock, PaperPlaneTilt, ArrowRight, FileArrowDown, WhatsappLogo,
   ArrowClockwise, EnvelopeSimple, Calendar, PencilSimple, FloppyDisk, X,
+  Megaphone, Sparkle,
 } from "@phosphor-icons/react";
 import { StageBadge, STAGE_LABELS, STAGE_ORDER } from "./Orders";
 import { toDmy, fromDmy } from "@/lib/dates";
@@ -140,6 +141,9 @@ export default function OrderView() {
           <ExpectedCompletionEditor order={order} onSave={saveExpectedCompletion} busy={busy} />
 
           <LineItemsPanel order={order} onReload={load} />
+
+          <NotifyCustomerPanel order={order} onReload={load} />
+
 
           <StageActions
             order={order}
@@ -761,3 +765,178 @@ function LineItemRow({ order, item, idx, onReload }) {
     </tr>
   );
 }
+
+// ─────────────────── Notify Customer (Universal Update) ───────────────────
+
+const ATTACH_OPTIONS = [
+  { id: "none",        label: "No attachment (text only)" },
+  { id: "proforma",    label: "Proforma Invoice (PI)" },
+  { id: "tax_invoice", label: "Tax Invoice" },
+  { id: "eway",        label: "E-Way Bill" },
+  { id: "lr",          label: "LR Copy" },
+];
+
+function NotifyCustomerPanel({ order, onReload }) {
+  const [presets, setPresets] = useState([]);
+  const [presetId, setPresetId] = useState("");
+  const [lines, setLines] = useState(["", "", "", "", ""]);
+  const [attach, setAttach] = useState("none");
+  const [alsoEmail, setAlsoEmail] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [lastResult, setLastResult] = useState(null);
+
+  useEffect(() => {
+    api.get("/notify/presets").then((r) => setPresets(r.data.presets || [])).catch(() => setPresets([]));
+  }, []);
+
+  const tokenSubs = (s) => {
+    if (!s) return "";
+    return s
+      .replace(/\{\{order_number\}\}/g, order.order_number || "")
+      .replace(/\{\{grand_total\}\}/g, Number(order.grand_total || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 }))
+      .replace(/\{\{product_code\}\}/g, (order.line_items || []).map((l) => l.product_code).filter(Boolean).join(", "))
+      .replace(/\{\{quantity\}\}/g, (order.line_items || []).map((l) => l.quantity).filter(Boolean).join(", "))
+      .replace(/\{\{expected_dispatch_date\}\}/g, (order.line_items || [])[0]?.expected_dispatch_date || order.expected_completion_date || "—")
+      .replace(/\{\{transporter\}\}/g, (order.dispatch || {}).transporter_name || "")
+      .replace(/\{\{lr_number\}\}/g, (order.dispatch || {}).lr_number || "");
+  };
+
+  const applyPreset = (pid) => {
+    setPresetId(pid);
+    const p = presets.find((x) => x.id === pid);
+    if (!p) return;
+    setLines((p.lines || ["", "", "", "", ""]).map(tokenSubs));
+    if (p.needs_attachment && attach === "none") setAttach("proforma");
+  };
+
+  const send = async () => {
+    const filled = lines.filter((l) => (l || "").trim()).length;
+    if (filled === 0) { toast.error("Please write at least one line of the message"); return; }
+    const customerName = order.contact_name || "the customer";
+    if (!window.confirm(`Send this WhatsApp${alsoEmail ? " + Email" : ""} update to ${customerName}?`)) return;
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/orders/${order.id}/notify`, {
+        vars: lines,
+        attach,
+        preset_id: presetId || null,
+        also_email: alsoEmail,
+      });
+      setLastResult(data);
+      if (data.whatsapp.sent || data.email.sent) {
+        const parts = [];
+        if (data.whatsapp.sent) parts.push("WhatsApp ✓");
+        if (data.email.sent) parts.push("Email ✓");
+        toast.success(parts.join(" · "));
+      } else {
+        toast.error(data.whatsapp.error || data.email.error || "Send failed");
+      }
+      onReload();
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border border-zinc-200 bg-white" data-testid="notify-customer-panel">
+      <div className="px-5 py-4 border-b border-zinc-200 flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Notify Customer</div>
+          <h3 className="font-heading font-black text-lg">Send Universal Update</h3>
+          <div className="text-xs text-zinc-500">Picks the right Meta template automatically (with PDF if you attach one).</div>
+        </div>
+        <span className="text-[10px] uppercase tracking-wider font-bold bg-zinc-100 text-zinc-700 px-2 py-1 inline-flex items-center gap-1">
+          <Sparkle size={11} weight="fill" /> Hello {order.contact_name || "Customer"}
+        </span>
+      </div>
+
+      <div className="p-5 space-y-4">
+        <div>
+          <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-700 mb-1 block">Choose a preset (optional)</label>
+          <select
+            value={presetId}
+            onChange={(e) => applyPreset(e.target.value)}
+            className="w-full border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:border-[#FBAE17]"
+            data-testid="notify-preset-select"
+          >
+            <option value="">— Pick a preset to auto-fill the 5 lines —</option>
+            {presets.map((p) => <option key={p.id} value={p.id}>{p.label}{p.needs_attachment ? "  · attaches PDF" : ""}</option>)}
+          </select>
+        </div>
+
+        <div className="space-y-2">
+          {[2, 3, 4, 5, 6].map((vn, idx) => (
+            <div key={vn} className="flex items-start gap-2">
+              <span className="font-mono text-xs text-zinc-400 mt-2 w-10 shrink-0">{`{{${vn}}}`}</span>
+              <input
+                value={lines[idx]}
+                onChange={(e) => setLines(lines.map((v, i) => i === idx ? e.target.value : v))}
+                placeholder={`Line ${idx + 1}`}
+                maxLength={160}
+                className="flex-1 border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:border-[#FBAE17]"
+                data-testid={`notify-line-${idx + 2}`}
+              />
+            </div>
+          ))}
+          <div className="text-[10px] text-zinc-400">Leave any line blank — it will display as "—" in the customer's message.</div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-700 mb-1 block">Attachment</label>
+            <select
+              value={attach}
+              onChange={(e) => setAttach(e.target.value)}
+              className="w-full border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:border-[#FBAE17]"
+              data-testid="notify-attach-select"
+            >
+              {ATTACH_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-zinc-700 mt-6 select-none cursor-pointer">
+            <input
+              type="checkbox"
+              checked={alsoEmail}
+              onChange={(e) => setAlsoEmail(e.target.checked)}
+              className="accent-[#FBAE17]"
+              data-testid="notify-also-email"
+            /> Also send by Email
+          </label>
+        </div>
+
+        {/* Preview */}
+        <div className="border border-dashed border-zinc-300 bg-zinc-50/60 px-4 py-3 text-sm whitespace-pre-line">
+          <div className="text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1">Preview</div>
+          <div className="text-zinc-700">
+            {`Hello ${order.contact_name || "Customer"}\nUpdate from H R Exporter!\n`}
+            {lines.map((l, i) => `\n${l || "—"}`).join("")}
+            {`\n\nThank you for choosing H R Exporter!`}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+          <div className="text-[10px] text-zinc-500 font-mono">Phone: {order.contact_phone || "—"} {order.contact_email ? `· ${order.contact_email}` : ""}</div>
+          <button
+            type="button"
+            onClick={send}
+            disabled={busy}
+            data-testid="notify-send-btn"
+            className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-5 py-3 flex items-center gap-2 disabled:opacity-50"
+          >
+            <Megaphone size={14} weight="bold" /> {busy ? "Sending…" : "Send Update"}
+          </button>
+        </div>
+
+        {lastResult && (
+          <div className="text-[11px] font-mono space-y-1 border-t border-zinc-100 pt-3" data-testid="notify-last-result">
+            <div>WhatsApp: {lastResult.whatsapp.sent ? <span className="text-emerald-700">sent ({lastResult.whatsapp.wamid?.slice(0, 12) || "no wamid"})</span> : <span className="text-red-600">{lastResult.whatsapp.error || "skipped"}</span>}</div>
+            <div>Email: {lastResult.email.sent ? <span className="text-emerald-700">sent</span> : <span className="text-zinc-500">{lastResult.email.error || "skipped"}</span>}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+

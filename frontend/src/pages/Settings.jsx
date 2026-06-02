@@ -57,6 +57,7 @@ export default function Settings() {
 function WhatsAppTab({ canEdit }) {
   const [data, setData] = useState(null);
   const [form, setForm] = useState(null);
+  const [uu, setUu] = useState(null);
   const [busy, setBusy] = useState(false);
   const [testPhone, setTestPhone] = useState("");
   const [testBusy, setTestBusy] = useState(false);
@@ -70,6 +71,7 @@ function WhatsAppTab({ canEdit }) {
       const { data } = await api.get("/settings/integrations");
       setData(data);
       setForm({ ...data.whatsapp, token: "" });
+      setUu(data.universal_update || { template_doc: "", template_text: "", template_language: "en_US" });
     } catch (err) {
       toast.error(formatApiError(err?.response?.data?.detail));
     }
@@ -107,11 +109,12 @@ function WhatsAppTab({ canEdit }) {
     e.preventDefault();
     setBusy(true);
     try {
-      const payload = { whatsapp: { ...form } };
+      const payload = { whatsapp: { ...form }, universal_update: { ...uu } };
       if (form.token === "" || form.token === null) delete payload.whatsapp.token;
       const { data } = await api.put("/settings/integrations", payload);
       setData(data);
       setForm({ ...data.whatsapp, token: "" });
+      setUu(data.universal_update || { template_doc: "", template_text: "", template_language: "en_US" });
       toast.success("WhatsApp settings saved");
     } catch (err) {
       toast.error(formatApiError(err?.response?.data?.detail));
@@ -132,7 +135,7 @@ function WhatsAppTab({ canEdit }) {
     } finally { setTestBusy(false); }
   };
 
-  if (!data || !form) return <div className="text-zinc-400 text-sm">Loading…</div>;
+  if (!data || !form || !uu) return <div className="text-zinc-400 text-sm">Loading…</div>;
 
   // Build deduplicated lists of unique template names, plus a name → languages map
   const tplNames = Array.from(new Set((templates || []).map((t) => t?.template_name || t?.name).filter(Boolean)));
@@ -268,6 +271,16 @@ function WhatsAppTab({ canEdit }) {
             setForm({ ...form, po_received_admin_template: v, po_received_admin_template_language: langs[0] || form.po_received_admin_template_language || "en" });
           }} options={tplNames} disabled={!canEdit} placeholder="leave blank to skip" />
           <TemplateField label="PO Admin Template Language" testId="wa-po-admin-template-lang" value={form.po_received_admin_template_language || ""} onChange={(v) => setForm({ ...form, po_received_admin_template_language: v })} options={poAdminLangs} disabled={!canEdit} placeholder="en or en_US" />
+
+          <div className="sm:col-span-2 border-t border-zinc-200 mt-2 pt-4">
+            <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Universal Update Templates</div>
+            <div className="text-xs text-zinc-500 mb-2">
+              Single approved Meta template the system uses for every per-line / per-order update. Body has 6 vars: <span className="font-mono">{`{{1}}`}</span> = customer name (auto), <span className="font-mono">{`{{2}}..{{6}}`}</span> = 5 lines you fill (preset or free text). Two variants: one with a PDF attachment, one text-only. Pick which template name maps to which.
+            </div>
+          </div>
+          <TemplateField label="Template with PDF attachment" testId="wa-uu-doc" value={uu.template_doc} onChange={(v) => setUu({ ...uu, template_doc: v })} options={tplNames} disabled={!canEdit} placeholder="hr_templet_delivery" />
+          <TemplateField label="Template text-only" testId="wa-uu-text" value={uu.template_text} onChange={(v) => setUu({ ...uu, template_text: v })} options={tplNames} disabled={!canEdit} placeholder="hr_product_dispatch" />
+          <Field label="Template Language" value={uu.template_language || ""} onChange={(v) => setUu({ ...uu, template_language: v })} disabled={!canEdit} testId="wa-uu-lang" placeholder="en_US" />
 
           <div className="sm:col-span-2 flex justify-end pt-2">
             <button type="submit" disabled={busy || !canEdit} data-testid="wa-save-btn" className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-5 py-3 flex items-center gap-2 disabled:opacity-60">
