@@ -424,3 +424,26 @@ Per user request matching the supplied taxinvoice (1).pdf reference:
   - **Defensive truncation in bcrypt helpers**: `core.hash_password` and `core.verify_password` now slice the input to 72 UTF-8 bytes (`pw.encode('utf-8')[:72]`) before calling bcrypt — belt-and-braces in case any path bypasses Pydantic.
 - **Tests**: `/app/backend/tests/test_iteration11_password_length.py` — 9 cases including a hammer test that loops passwords up to 5000 chars (all return 422, supervisor stays RUNNING). Combined regression: 51/51 backend pass.
 
+
+## P2 + P3 Completion — 2026-02 (iteration_12)
+All remaining backlog items shipped in one batch. 67/67 backend tests pass; no regressions.
+
+### P2 (Customer-facing polish)
+- **Customer PO ack** (`server.py::_ack_customer_po_received`): When a customer submits a PO, an acknowledgement WhatsApp + Email now go back to the customer in addition to the admin notify. Best-effort (try/except per channel) — `POST /api/public/quote/{qid}/submit-po` will still return 200 if the ack fails. Test-mode redirect honoured.
+- **Public `/track/{order_number}` deep-link** (`GET /api/public/track?order_number=…` or `/api/public/track/HRE/ORD/...`): No-auth slim projection — milestones, current stage, transporter/LR. Add `&phone=<last10>` to verify the caller and unlock line items + shipment docs. Frontend page at `/track` (`pages/public/TrackOrder.jsx`).
+- **Customer 360** (`GET /api/contacts/{cid}/customer-360`): One-shot admin response with contact + last 5 quotes + last 3 orders + WhatsApp engagement counters (sent/delivered/read/failed/last_at) + totals.
+
+### P3 (Hygiene & power-user)
+- **Brute-force lockout** (`routers/auth.py`): 5 failed logins per email within 15 min → 6th attempt returns **429** with "Try again in N minutes". In-memory dict (clears on backend restart, acceptable for single-worker preview). Successful login (or password change) clears the counter.
+- **`/api/health/integrations`** (`routers/health.py`): Admin-auth ping of BizChat (template-list) + SMTP (login+NOOP+quit). Returns `{whatsapp, smtp, test_mode, overall_ok}` with per-service latency. ~1–2s per call — admin-triggered only, do NOT poll.
+- **Variant Copy + Share-to-WhatsApp buttons** (`ProductFamilyDetail.jsx`): Each variant row now has Copy (clipboard, toast) and WhatsApp share (`wa.me/?text=…`) icons before Edit/Delete. testids: `fam-variant-copy-{vid}` / `fam-variant-share-wa-{vid}`.
+- **Quote diff endpoint** (`GET /api/quotations/{qid}/diff/{other_qid}`): Returns `{line_diff: [added|removed|modified|unchanged], totals_diff, summary}` for any two quotes from the same contact. 400 if different contacts; 404 if missing.
+
+### Bug fix (caught by iter_12)
+- `_public_order_summary` referenced an undefined `public_shipments` local — pre-existing NameError introduced when Phase-3 shipments landed. Fixed by constructing the list inline (slim projection without internal notes).
+
+### Tests
+- `tests/test_iteration12_p2_p3.py` — 16 cases, all pass. Full regression chain (iter_9 + iter_10 + iter_11 + iter_12) = **67/67**.
+
+### Refactor recommended (not blocking)
+- `backend/server.py` is now 1505 lines. Public endpoints (`/public/track`, `/public/quote/{qid}/submit-po`, `_public_order_summary`, `_notify_admin_po_received`, `_ack_customer_po_received`) should move to a new `routers/public.py` module. The recurring NameError on `public_shipments` is symptomatic of inline edits to an oversized file.
