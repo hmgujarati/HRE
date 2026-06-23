@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import QuoteStatusBadge from "@/components/QuoteStatusBadge";
 import PublicTrackingStrip from "@/components/PublicTrackingStrip";
 import PublicLineItemStatus from "@/components/PublicLineItemStatus";
+import PublicShipments from "@/components/PublicShipments";
 import SubmitPoModal from "@/components/SubmitPoModal";
 
 export default function MyQuotes() {
@@ -175,6 +176,7 @@ export default function MyQuotes() {
                   <div className="border-t border-zinc-200 p-4 bg-zinc-50/40 space-y-4">
                     <PublicTrackingStrip order={q.order} />
                     <PublicLineItemStatus order={q.order} />
+                    <PublicShipments order={q.order} />
                   </div>
                 )}
                 {!hasOrder && isOpen && (

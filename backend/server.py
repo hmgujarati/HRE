@@ -710,6 +710,7 @@ def _public_order_summary(order: dict) -> dict:
         "expected_completion_date": order.get("expected_completion_date") or "",
         "updated_at": order.get("updated_at"),
         "line_status": line_status,
+        "shipments": public_shipments,
     }
 
 
@@ -1331,6 +1332,8 @@ from routers import contacts as _contacts_router  # noqa: E402
 from routers import quotations as _quotations_router  # noqa: E402
 # Phase C (Tier 2) — orders
 from routers import orders as _orders_router  # noqa: E402
+# Phase 3 — shipments
+from routers import shipments as _shipments_router  # noqa: E402
 
 api.include_router(_auth_router.router)
 api.include_router(_materials_router.router)
@@ -1344,6 +1347,7 @@ api.include_router(_webhooks_router.router)
 api.include_router(_contacts_router.router)
 api.include_router(_quotations_router.router)
 api.include_router(_orders_router.router)
+api.include_router(_shipments_router.router)
 
 
 # Mount the API router AFTER all routes are registered

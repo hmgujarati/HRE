@@ -6,7 +6,7 @@ import {
   ArrowLeft, FileArrowUp, FileText, Package, Truck, ClipboardText,
   CheckCircle, Clock, PaperPlaneTilt, ArrowRight, FileArrowDown, WhatsappLogo,
   ArrowClockwise, EnvelopeSimple, Calendar, PencilSimple, FloppyDisk, X,
-  Megaphone, Sparkle,
+  Megaphone, Sparkle, Plus, Trash,
 } from "@phosphor-icons/react";
 import { StageBadge, STAGE_LABELS, STAGE_ORDER } from "./Orders";
 import { toDmy, fromDmy } from "@/lib/dates";
@@ -141,6 +141,9 @@ export default function OrderView() {
           <ExpectedCompletionEditor order={order} onSave={saveExpectedCompletion} busy={busy} />
 
           <LineItemsPanel order={order} onReload={load} />
+
+          <ShipmentsPanel order={order} onReload={load} />
+
 
           <NotifyCustomerPanel order={order} onReload={load} />
 
@@ -880,7 +883,7 @@ function NotifyCustomerPanel({ order, onReload }) {
               />
             </div>
           ))}
-          <div className="text-[10px] text-zinc-400">Leave any line blank — it will display as "—" in the customer's message.</div>
+          <div className="text-[10px] text-zinc-400">Leave any line blank — it will display as a dash in the customer message.</div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -935,6 +938,388 @@ function NotifyCustomerPanel({ order, onReload }) {
             <div>Email: {lastResult.email.sent ? <span className="text-emerald-700">sent</span> : <span className="text-zinc-500">{lastResult.email.error || "skipped"}</span>}</div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────── Shipments Panel (Phase 3) ───────────────────
+
+const SHIPMENT_STAGE_STYLES = {
+  created:    { label: "Draft",       cls: "bg-zinc-200 text-zinc-800" },
+  invoiced:   { label: "Invoiced",    cls: "bg-blue-200 text-blue-900" },
+  dispatched: { label: "Dispatched",  cls: "bg-purple-200 text-purple-900" },
+  delivered:  { label: "Delivered",   cls: "bg-emerald-200 text-emerald-900" },
+};
+
+function ShipmentsPanel({ order, onReload }) {
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const shipments = order.shipments || [];
+  const items = order.line_items || [];
+  const inSomeShipment = new Set();
+  shipments.forEach((s) => (s.line_indexes || []).forEach((i) => inSomeShipment.add(i)));
+  const eligible = items
+    .map((li, idx) => ({ li, idx }))
+    .filter(({ li, idx }) => !inSomeShipment.has(idx) && ["ready", "packed", "in_production", "pending"].includes(li.qty_status || "pending"));
+  const summary = (() => {
+    if (!shipments.length) return "No shipments yet";
+    const disp = shipments.filter((s) => ["dispatched", "delivered"].includes(s.stage)).length;
+    const del = shipments.filter((s) => s.stage === "delivered").length;
+    if (del === shipments.length && !eligible.length) return "All shipments delivered";
+    if (disp === shipments.length && !eligible.length) return "All shipments dispatched";
+    if (disp > 0) return `${disp} of ${shipments.length} dispatched · ${eligible.length} item(s) still pending`;
+    return `${shipments.length} shipment(s) being prepared`;
+  })();
+
+  return (
+    <div className="border border-zinc-200 bg-white" data-testid="shipments-panel">
+      <div className="px-5 py-4 border-b border-zinc-200 flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-1">Shipments</div>
+          <h3 className="font-heading font-black text-lg">Dispatch Bundles</h3>
+          <div className="text-xs text-zinc-500">{summary}</div>
+        </div>
+        <button
+          onClick={() => setWizardOpen(true)}
+          disabled={!eligible.length}
+          data-testid="create-shipment-btn"
+          title={eligible.length ? `${eligible.length} line(s) available to ship` : "All lines are already in a shipment"}
+          className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-4 py-2 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Plus size={14} weight="bold" /> Create Shipment
+        </button>
+      </div>
+
+      <div className="divide-y divide-zinc-100">
+        {shipments.length === 0 && (
+          <div className="px-5 py-6 text-sm text-zinc-400 text-center" data-testid="shipments-empty">
+            No shipments yet. Click Create Shipment to bundle 1+ ready line items for dispatch.
+          </div>
+        )}
+        {shipments.map((s) => (
+          <ShipmentRow key={s.id} order={order} shipment={s} onReload={onReload} />
+        ))}
+      </div>
+
+      <ShipmentWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        order={order}
+        eligible={eligible}
+        onCreated={() => { setWizardOpen(false); onReload(); }}
+      />
+    </div>
+  );
+}
+
+function ShipmentRow({ order, shipment: s, onReload }) {
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [docKind, setDocKind] = useState("");
+  const fileRef = useRef(null);
+  const style = SHIPMENT_STAGE_STYLES[s.stage] || SHIPMENT_STAGE_STYLES.created;
+  const docs = s.documents || {};
+  const items = order.line_items || [];
+  const lines = (s.line_indexes || []).map((i) => items[i]).filter(Boolean);
+  const [form, setForm] = useState({
+    transporter_name: s.transporter_name || "",
+    lr_number: s.lr_number || "",
+    invoice_number: s.invoice_number || "",
+    expected_delivery_date: toDmy(s.expected_delivery_date || ""),
+  });
+
+  const saveFields = async () => {
+    let ymd = null;
+    if (form.expected_delivery_date.trim()) {
+      ymd = fromDmy(form.expected_delivery_date.trim());
+      if (!ymd) { toast.error("ETA must be DD-MM-YYYY"); return; }
+    }
+    setBusy(true);
+    try {
+      await api.patch(`/orders/${order.id}/shipments/${s.id}`, { ...form, expected_delivery_date: ymd });
+      toast.success(`${s.shipment_number} updated`);
+      setEditing(false);
+      onReload();
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+  const uploadDoc = async (kind, file) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("doc_key", kind);
+      fd.append("file", file);
+      await api.post(`/orders/${order.id}/shipments/${s.id}/upload`, fd, { headers: { "Content-Type": "multipart/form-data" } });
+      toast.success(`${kind.replace("_", " ")} uploaded`);
+      onReload();
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail));
+    } finally { setBusy(false); setDocKind(""); }
+  };
+
+  const triggerUpload = (kind) => {
+    setDocKind(kind);
+    setTimeout(() => fileRef.current?.click(), 0);
+  };
+
+  const dispatchShipment = async () => {
+    if (!window.confirm(`Dispatch ${s.shipment_number}?\n${lines.length} line(s) will be marked as shipped.`)) return;
+    setBusy(true);
+    try {
+      let ymd = null;
+      if (form.expected_delivery_date.trim()) ymd = fromDmy(form.expected_delivery_date.trim());
+      await api.post(`/orders/${order.id}/shipments/${s.id}/dispatch`, {
+        transporter_name: form.transporter_name || undefined,
+        lr_number: form.lr_number || undefined,
+        invoice_number: form.invoice_number || undefined,
+        expected_delivery_date: ymd || undefined,
+      });
+      toast.success(`${s.shipment_number} dispatched · line(s) marked shipped`);
+      onReload();
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+  const deliverShipment = async () => {
+    if (!window.confirm(`Mark ${s.shipment_number} as delivered?`)) return;
+    setBusy(true);
+    try {
+      await api.post(`/orders/${order.id}/shipments/${s.id}/deliver`, {});
+      toast.success(`${s.shipment_number} delivered · line(s) marked delivered`);
+      onReload();
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+  const deleteShipment = async () => {
+    if (!window.confirm(`Delete ${s.shipment_number}? This only works on draft / invoiced shipments.`)) return;
+    setBusy(true);
+    try {
+      await api.delete(`/orders/${order.id}/shipments/${s.id}`);
+      toast.success(`${s.shipment_number} deleted`);
+      onReload();
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+  const docBadge = (kind, label) => {
+    const u = docs[kind]?.url || (typeof docs[kind] === "string" ? docs[kind] : "");
+    const has = !!u;
+    return has ? (
+      <a href={u} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-1 hover:bg-emerald-100" data-testid={`ship-doc-${kind}-${s.id}`}>
+        <CheckCircle size={10} weight="fill" /> {label}
+      </a>
+    ) : (s.stage === "created" || s.stage === "invoiced") ? (
+      <button onClick={() => triggerUpload(kind)} disabled={busy} className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider border border-zinc-300 text-zinc-700 hover:border-[#FBAE17] hover:text-[#FBAE17] px-2 py-1" data-testid={`ship-upload-${kind}-${s.id}`}>
+        <FileArrowUp size={10} weight="bold" /> Upload {label}
+      </button>
+    ) : (
+      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider bg-zinc-100 text-zinc-500 px-2 py-1">{label} —</span>
+    );
+  };
+
+  return (
+    <div className="px-5 py-4 space-y-3" data-testid={`shipment-row-${s.id}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="font-heading font-black text-base">{s.shipment_number}</span>
+          <span className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 ${style.cls}`}>{style.label}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {(s.stage === "invoiced") && (
+            <button onClick={dispatchShipment} disabled={busy} data-testid={`ship-dispatch-${s.id}`} className="bg-[#1A1A1A] hover:bg-zinc-700 text-white text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 flex items-center gap-1 disabled:opacity-50">
+              <Truck size={11} weight="bold" /> Dispatch
+            </button>
+          )}
+          {s.stage === "dispatched" && (
+            <button onClick={deliverShipment} disabled={busy} data-testid={`ship-deliver-${s.id}`} className="bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 flex items-center gap-1 disabled:opacity-50">
+              <CheckCircle size={11} weight="bold" /> Mark Delivered
+            </button>
+          )}
+          {(s.stage === "created" || s.stage === "invoiced") && (
+            <button onClick={deleteShipment} disabled={busy} data-testid={`ship-delete-${s.id}`} className="text-zinc-400 hover:text-red-600 text-[10px] font-bold uppercase tracking-wider px-2 py-1.5 flex items-center gap-1 disabled:opacity-50">
+              <Trash size={11} weight="bold" /> Delete
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1">Items in this shipment</div>
+          <ul className="space-y-1">
+            {lines.map((li, i) => (
+              <li key={i} className="text-zinc-700"><span className="font-mono font-bold">{li.product_code}</span> · {li.quantity}{li.unit ? ` ${li.unit}` : ""}{li.family_name ? <span className="text-zinc-500"> · {li.family_name}</span> : null}</li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="space-y-2">
+          {!editing ? (
+            <>
+              <div className="text-[10px] uppercase tracking-wider font-bold text-zinc-500 mb-1 flex items-center justify-between">
+                Transport details
+                {(s.stage === "created" || s.stage === "invoiced") && (
+                  <button onClick={() => setEditing(true)} className="text-zinc-500 hover:text-[#FBAE17] text-[10px] font-bold inline-flex items-center gap-1" data-testid={`ship-edit-${s.id}`}><PencilSimple size={10} weight="bold" /> Edit</button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div><span className="text-zinc-500">Transporter:</span> <span className="font-mono">{s.transporter_name || "—"}</span></div>
+                <div><span className="text-zinc-500">LR #:</span> <span className="font-mono">{s.lr_number || "—"}</span></div>
+                <div><span className="text-zinc-500">Invoice #:</span> <span className="font-mono">{s.invoice_number || "—"}</span></div>
+                <div><span className="text-zinc-500">ETA:</span> <span className="font-mono">{toDmy(s.expected_delivery_date) || "—"}</span></div>
+                {s.dispatched_at && <div className="col-span-2"><span className="text-zinc-500">Dispatched:</span> <span className="font-mono">{toDmy(s.dispatched_at)}</span></div>}
+                {s.delivered_at && <div className="col-span-2"><span className="text-zinc-500">Delivered:</span> <span className="font-mono">{toDmy(s.delivered_at)}</span></div>}
+              </div>
+            </>
+          ) : (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <input value={form.transporter_name} onChange={(e) => setForm({ ...form, transporter_name: e.target.value })} placeholder="Transporter" className="border border-zinc-300 px-2 py-1 text-xs" data-testid={`ship-edit-transporter-${s.id}`} />
+                <input value={form.lr_number} onChange={(e) => setForm({ ...form, lr_number: e.target.value })} placeholder="LR No." className="border border-zinc-300 px-2 py-1 text-xs font-mono" data-testid={`ship-edit-lr-${s.id}`} />
+                <input value={form.invoice_number} onChange={(e) => setForm({ ...form, invoice_number: e.target.value })} placeholder="Invoice No." className="border border-zinc-300 px-2 py-1 text-xs font-mono" data-testid={`ship-edit-invoice-${s.id}`} />
+                <input value={form.expected_delivery_date} onChange={(e) => setForm({ ...form, expected_delivery_date: e.target.value })} placeholder="ETA DD-MM-YYYY" className="border border-zinc-300 px-2 py-1 text-xs font-mono" data-testid={`ship-edit-eta-${s.id}`} />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={saveFields} disabled={busy} className="bg-[#FBAE17] hover:bg-[#E59D12] text-black text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 flex items-center gap-1 disabled:opacity-50" data-testid={`ship-edit-save-${s.id}`}>
+                  <FloppyDisk size={11} weight="bold" /> Save
+                </button>
+                <button onClick={() => { setEditing(false); setForm({ transporter_name: s.transporter_name || "", lr_number: s.lr_number || "", invoice_number: s.invoice_number || "", expected_delivery_date: toDmy(s.expected_delivery_date || "") }); }} className="border border-zinc-300 text-zinc-700 text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 hover:bg-zinc-100">Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        {docBadge("tax_invoice", "Tax Invoice")}
+        {docBadge("eway_bill", "E-Way Bill")}
+        {docBadge("lr_copy", "LR Copy")}
+      </div>
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".pdf,image/*"
+        className="hidden"
+        onChange={(e) => uploadDoc(docKind, e.target.files?.[0])}
+      />
+    </div>
+  );
+}
+
+function ShipmentWizard({ open, onClose, order, eligible, onCreated }) {
+  const [picked, setPicked] = useState(new Set());
+  const [transporter, setTransporter] = useState("");
+  const [lr, setLr] = useState("");
+  const [eta, setEta] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) { setPicked(new Set()); setTransporter(""); setLr(""); setEta(""); }
+  }, [open]);
+
+  if (!open) return null;
+
+  const toggle = (idx) => {
+    const n = new Set(picked);
+    n.has(idx) ? n.delete(idx) : n.add(idx);
+    setPicked(n);
+  };
+
+  const totals = (() => {
+    let qty = 0, value = 0;
+    eligible.forEach(({ li, idx }) => {
+      if (!picked.has(idx)) return;
+      qty += Number(li.quantity) || 0;
+      value += (Number(li.base_price) || 0) * (Number(li.quantity) || 0);
+    });
+    return { qty, value };
+  })();
+
+  const create = async () => {
+    if (!picked.size) { toast.error("Pick at least one line item"); return; }
+    let ymd = null;
+    if (eta.trim()) {
+      ymd = fromDmy(eta.trim());
+      if (!ymd) { toast.error("ETA must be DD-MM-YYYY"); return; }
+    }
+    setBusy(true);
+    try {
+      await api.post(`/orders/${order.id}/shipments`, {
+        line_indexes: Array.from(picked),
+        transporter_name: transporter.trim(),
+        lr_number: lr.trim(),
+        expected_delivery_date: ymd,
+      });
+      toast.success(`Draft shipment created with ${picked.size} line(s)`);
+      onCreated();
+    } catch (e) {
+      toast.error(formatApiError(e?.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" data-testid="shipment-wizard">
+      <div className="bg-white border border-zinc-200 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="px-5 py-4 border-b border-zinc-200 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Package size={18} weight="fill" className="text-[#FBAE17]" />
+            <h3 className="font-heading font-black text-lg">Create Shipment</h3>
+          </div>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-700" data-testid="wizard-close-btn"><X size={18} weight="bold" /></button>
+        </div>
+
+        <div className="p-5 space-y-5">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">1 · Pick line items</div>
+            <div className="border border-zinc-200 divide-y divide-zinc-100 max-h-64 overflow-y-auto">
+              {eligible.length === 0 && <div className="px-3 py-4 text-sm text-zinc-400 text-center">No eligible lines — every line is already in a shipment.</div>}
+              {eligible.map(({ li, idx }) => (
+                <label key={idx} className="flex items-start gap-3 px-3 py-2 hover:bg-zinc-50 cursor-pointer">
+                  <input type="checkbox" checked={picked.has(idx)} onChange={() => toggle(idx)} className="accent-[#FBAE17] mt-1" data-testid={`wizard-pick-${idx}`} />
+                  <div className="flex-1">
+                    <div className="text-sm font-mono font-bold text-[#1A1A1A]">{li.product_code} <span className="font-mono text-xs text-zinc-500">· {li.quantity}{li.unit ? ` ${li.unit}` : ""}</span></div>
+                    <div className="text-[11px] text-zinc-500">{li.family_name || ""} {li.qty_status ? <span className="ml-1 inline-block px-1.5 py-0.5 bg-zinc-100 text-zinc-700 text-[9px] uppercase tracking-wider font-bold">{li.qty_status.replace("_", " ")}</span> : null}</div>
+                  </div>
+                  <div className="text-right text-[11px] text-zinc-600 font-mono">₹{(((Number(li.base_price) || 0) * (Number(li.quantity) || 0))).toLocaleString("en-IN", { minimumFractionDigits: 0 })}</div>
+                </label>
+              ))}
+            </div>
+            {picked.size > 0 && (
+              <div className="mt-2 text-xs text-zinc-600 font-mono" data-testid="wizard-totals">
+                Selected: <span className="font-bold">{picked.size}</span> line(s) · {totals.qty.toLocaleString("en-IN")} units · ₹{totals.value.toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">2 · Dispatch details (optional now, can edit later)</div>
+            <div className="grid grid-cols-2 gap-3">
+              <input value={transporter} onChange={(e) => setTransporter(e.target.value)} placeholder="Transporter (e.g. SafexPress)" className="border border-zinc-300 px-3 py-2 text-sm" data-testid="wizard-transporter" />
+              <input value={lr} onChange={(e) => setLr(e.target.value)} placeholder="LR Number" className="border border-zinc-300 px-3 py-2 text-sm font-mono" data-testid="wizard-lr" />
+              <input value={eta} onChange={(e) => setEta(e.target.value)} placeholder="Expected delivery DD-MM-YYYY" maxLength={10} className="border border-zinc-300 px-3 py-2 text-sm font-mono" data-testid="wizard-eta" />
+            </div>
+          </div>
+
+          <div className="text-xs text-zinc-500 bg-zinc-50 border border-zinc-200 px-3 py-2">
+            <strong>Next step after creating:</strong> Upload Tax Invoice + E-Way Bill (and LR Copy) on the shipment row, then click Dispatch.
+          </div>
+
+          <div className="flex justify-end gap-2 border-t border-zinc-200 pt-4">
+            <button onClick={onClose} className="border border-zinc-300 text-zinc-700 text-xs uppercase tracking-wider font-bold px-4 py-2 hover:bg-zinc-100">Cancel</button>
+            <button onClick={create} disabled={busy || !picked.size} data-testid="wizard-create-btn" className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-5 py-2 flex items-center gap-2 disabled:opacity-50">
+              {busy ? "Creating…" : <>Create Draft Shipment <ArrowRight size={12} weight="bold" /></>}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
