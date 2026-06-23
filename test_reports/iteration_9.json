@@ -1,0 +1,63 @@
+{
+  "summary": "Full regression of Phase 1 (per-line tracking), Phase 2 (Universal Update notify) and Phase 3 (Shipments) plus auth, dashboard, pricing, settings, GST, public-OTP gates and security. Created /app/backend/tests/test_iteration9_phase123.py with 33 tests — ALL PASS (33/33). Re-ran prior regression suites: test_iteration7_new_behaviors.py (17/17), test_iteration8_hot_leads_seed.py (clean), test_whatsapp_bot_flow.py 3/4 pass (1 pre-existing failure on variant-price assertion, unrelated to current scope). Frontend smoke verified login/public/admin shell visibility rules. STRICT-PHONE RULE honoured: the only outbound WhatsApp the suite can trigger is /orders/{oid}/notify on an order owned by Harsh Gujarati (+918200663263). Endpoint accepted the call structurally — actual delivery depends on whether templates were synced; not enforced here. No test send to any other phone. All TEST_ contacts/quotes/orders cleaned up.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/settings/integrations",
+        "issue": "Spec says 'webhook_url is non-empty in response' — it IS populated but as `whatsapp.webhook_url`, NOT a top-level `webhook_url`. Frontend already reads it from the nested path, so functionally OK; flagging in case the spec wording implied top-level."
+      },
+      {
+        "endpoint": "POST /api/orders/{oid}/notify",
+        "issue": "When templates are not synced or BizChat returns 'Template for the selected language not found', the endpoint still returns 200 wrapped in a result object. The test treats this as a structural pass per other_misc_info. No real WA delivery validated."
+      },
+      {
+        "endpoint": "WA bot variant picker (services/whatsapp_bot.py)",
+        "issue": "test_whatsapp_bot_flow.py::test_full_flow_to_proforma FAILS on `assert '₹' in '6 mm² · ⌀5.3 · J=33'` — the variant list-row description no longer includes the price token. Either the test is stale or the bot dropped the ₹ formatting in the variant picker. Pre-existing from iter_8; main agent to confirm intent."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Pricing Chart",
+        "issues": ["Spec says button label is 'Toggle Priceless' — actual label is 'DEACTIVATE PRICELESS (600)' (with red border). Functionally correct (smart toggle by count) but label drift from spec wording."]
+      },
+      {
+        "screen": "Settings → WhatsApp / Catalogue",
+        "issues": ["Universal Update Templates section + 'Hide empty families' toggle exist further down the tab — initial-render innerText snapshot did not contain them. Visual confirmation needed by main agent (or scroll-to verification)."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration9_phase123.py",
+    "/app/test_reports/pytest/iteration9.xml"
+  ],
+  "action_items": [
+    "(optional) Investigate why WA bot variant picker dropped the ₹ price from variant row description — either restore it OR update test_whatsapp_bot_flow.py:187 to reflect intentional change.",
+    "(optional cosmetic) Either rename 'Deactivate Priceless' button to literal 'Toggle Priceless' to match spec wording, OR update the spec/QA scripts.",
+    "(no change required) webhook_url surfacing under whatsapp.webhook_url is fine; spec wording was ambiguous.",
+    "Carry-over from iter_7 (still open per code review): server.py is still huge — public-session endpoints should move into routers/public.py."
+  ],
+  "critical_code_review_comments": [
+    "services/shipments.make_shipment_draft uses HTTPException for control flow inside a helper — fine in this scope but consider returning typed errors so the helper is unit-testable without the FastAPI request cycle.",
+    "routers/orders.py is now 599 lines — getting close to the 700-line ceiling. Phase 1 line-patch + Phase 2 notify endpoints sit alongside Phase 0 stage-advance helpers; consider splitting per-phase or per-domain (line_tracking.py, notifications.py).",
+    "Phase 3 dispatch_shipment doesn't block re-dispatching from `delivered` cleanly — it raises 400 only when stage in {dispatched, delivered}, but if delivered → dispatched downgrade ever happens (e.g. via patch_shipment), the line-status flip-back is not modelled. Edge case but worth a guard."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration9_phase123.py (new — 33 tests)"
+  ],
+  "success_rate": {
+    "backend": "33/33 (100%) on the iteration_9 suite. Plus 17/17 on iter_7 re-run, 3/4 on WA-bot suite (1 pre-existing). Overall ≈98%.",
+    "frontend": "smoke pass — login page (no admin hint), public catalogue (no Admin link), admin sidebar (no Coming Soon), Pricing Chart (priceless toggle present), Settings (WhatsApp + Catalogue tabs present). Universal-Update / Hide-empty-families needs scroll-level verification."
+  },
+  "test_credentials": "admin@hrexporter.com / Admin@123 (from /app/memory/test_credentials.md). Public phone: +918200663263.",
+  "seed_data_creation": "gujarat_quote_and_order fixture creates ONE TEST quote + ONE TEST order against the existing Harsh Gujarati contact, drives it through Phase 1/2/3, then DELETEs both at fixture teardown. seed-demo-data is invoked twice (idempotency check) and the demo contacts/quotes are cleaned up at end of TestDashboard. Live DB returned to clean state.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "To re-run: `pytest /app/backend/tests/test_iteration9_phase123.py -v --junitxml=/app/test_reports/pytest/iteration9.xml`. The fixture `gujarat_quote_and_order` depends on the Harsh Gujarati contact existing (phone_norm ending 8200663263); skip otherwise. Shipment endpoints expect content-type multipart for /upload (Form `doc_key` + File `file`). For Phase-2 notify, BizChat sync state will determine 200 ok vs 200 with template-not-found error in the body — either is a structural pass.",
+  "rca of the issue": "No new RCA — iter_7 critical (duplicate DELETE /quotations route) is FIXED in current code: only one @router.delete handler exists at line 347; the stale one at line 216 is gone. The iter_7 failure no longer reproduces. The WA-bot variant ₹ drop is pre-existing and orthogonal to Phase 1/2/3 work."
+}
