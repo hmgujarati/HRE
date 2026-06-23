@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 11 — verified bcrypt 72-byte crash fix on /api/auth/login and /api/auth/change-password. Created /app/backend/tests/test_iteration11_password_length.py (9 tests, ALL PASS). Confirmed: (a) 200-char password on /login → 422 (Pydantic max_length=128), no 500, no crash; (b) 128-char wrong password → 401 (handled gracefully, not 500); (c) empty password → 422 (min_length=1); (d) correct admin creds → 200 + token (no regression); (e) hammered /login with passwords up to 5000 chars in a single test loop — every one rejected with 422, backend remained RUNNING (sudo supervisorctl status backend = RUNNING); (f) change-password with 200-char new_password → 422, with 5-char new_password → 422; (g) full rotate cycle: Admin@123 → NewPass@2026 → login works → rotate back → Admin@123 login works. Test_credentials.md is intact (Admin@123 still valid, verified by post-test curl returning 200). Regression: re-ran iter_10 (9 tests) + iter_9 (33 tests) = 42/42 PASS. Combined run = 51/51 backend tests passing.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration11_password_length.py",
+    "/app/test_reports/pytest/iteration11.xml",
+    "/app/test_reports/pytest/iteration11_regression.xml"
+  ],
+  "action_items": [
+    "No blockers. Bug fix is verified end-to-end. The user's complaint ('long password crashes server') is resolved: 200/500/1024/5000-char inputs all return 422 cleanly and the backend supervisor stays RUNNING."
+  ],
+  "critical_code_review_comments": [
+    "core.hash_password / verify_password: defensive UTF-8 truncation to 72 bytes is correct — bcrypt's hard ceiling is bytes not chars, so .encode('utf-8')[:72] is the right slice. Pydantic max_length=128 at the edge is the primary guard, the truncation is belt-and-braces for any pre-existing over-long stored hash or back-channel call.",
+    "routers/auth.py ChangePasswordIn: current_password uses min_length=1 (correct — must allow legacy short pws to be replaced) while new_password keeps min_length=8 (correct — enforces strength on the new value). Both capped at max_length=128. Consistent with /login.",
+    "Minor: bcrypt's 72-byte limit is on the *raw* password bytes BEFORE hashing, so slicing UTF-8 bytes can cut a multi-byte codepoint in half. The resulting bytes are still valid input to bcrypt (it just treats them as opaque bytes) so no crash — but two distinct UTF-8 passwords that share the same first-72-byte prefix would hash identically. This is the same behaviour every bcrypt-using product has and not specific to this fix; flagged only for documentation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration11_password_length.py (NEW — 9 tests, all pass)"
+  ],
+  "success_rate": {
+    "backend": "51/51 (100%) — 9 new iter_11 tests + 9 iter_10 + 33 iter_9 regression.",
+    "frontend": "Not tested this iteration (testing_type: backend only as per review_request)."
+  },
+  "test_credentials": "admin@hrexporter.com / Admin@123 (from /app/memory/test_credentials.md). VERIFIED still valid after the rotate-and-rotate-back test — post-test curl to /api/auth/login returned 200.",
+  "seed_data_creation": "None. The rotate test changes the admin password to NewPass@2026 mid-run and rotates it back to Admin@123 before completion (with a finally-block safety net). No persistent data created.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Re-run iter_11: `pytest /app/backend/tests/test_iteration11_password_length.py -v`. The rotate test (test_change_password_rotate_and_rotate_back) has a try/finally safety net that force-rotates the password back to Admin@123 even if any intermediate assertion fails — so test_credentials.md will stay valid even on partial failures. To re-run full backend regression: `pytest backend/tests/test_iteration9_phase123.py backend/tests/test_iteration10_testmode_outbound.py backend/tests/test_iteration11_password_length.py -v` (51 tests, ~15s).",
+  "rca of the issue": "ROOT CAUSE: bcrypt enforces a hard 72-byte limit on input; passing >72 bytes raises ValueError → unhandled → FastAPI returns 500 → server log shows traceback and (under some configurations) worker recycle. FIX (already applied by main agent): two-layer defence — (1) Pydantic Field(min_length=1, max_length=128) on LoginIn.password and ChangePasswordIn.current_password/new_password rejects oversize input at the API edge with a clean 422; (2) hash_password/verify_password slice the input to 72 bytes (.encode('utf-8')[:72]) before handing to bcrypt, so even if a path ever bypasses Pydantic (e.g. legacy stored data, direct service call) bcrypt cannot raise. VERIFICATION: all 9 dedicated tests pass, the long-password hammer test (200/500/1024/5000 chars in a loop) drains cleanly with 422s, and `supervisorctl status backend` shows RUNNING throughout. Regression: 42 prior backend tests still pass — no behavioural change for valid inputs."
+}

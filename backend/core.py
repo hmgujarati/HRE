@@ -59,12 +59,17 @@ def now_iso() -> str:
 
 
 def hash_password(pw: str) -> str:
-    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
+    # bcrypt has a hard 72-byte limit on the input. Anything longer raises
+    # ValueError and would 500 the server. Truncate at the byte boundary
+    # (defensive — Pydantic also caps password length at the API edge).
+    pw_bytes = pw.encode("utf-8")[:72]
+    return bcrypt.hashpw(pw_bytes, bcrypt.gensalt()).decode()
 
 
 def verify_password(pw: str, hashed: str) -> bool:
     try:
-        return bcrypt.checkpw(pw.encode(), hashed.encode())
+        pw_bytes = pw.encode("utf-8")[:72]
+        return bcrypt.checkpw(pw_bytes, hashed.encode())
     except Exception:
         return False
 
@@ -114,7 +119,7 @@ def require_role(*roles):
 # ---------- Pydantic models (auth + catalogue scaffolding) ----------
 class LoginIn(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 class UserOut(BaseModel):
