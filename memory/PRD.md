@@ -401,3 +401,18 @@ Per user request matching the supplied taxinvoice (1).pdf reference:
 - **UI**: Removed stale "Default admin: admin@hrexporter.com / Admin@123" hint from `Login.jsx` (was still in the file despite the prior handoff claiming it was removed). Removed "Coming Soon" section + WhatsApp Bot / Expo Leads stub rows from admin sidebar (`Sidebar.jsx`) — those modules now live in the main CRM menu. Removed "Admin" sign-in link from the public catalogue header (`PublicLayout.jsx`). Bumped the public header logo from `h-9 sm:h-12` to `h-16 sm:h-20` and applied negative vertical margins (`-my-3 sm:-my-4`) so the logo grows visually without enlarging the header bar.
 - **Test**: Backend curl verified — `/api/dashboard/hot-leads` returns 3 pre-existing read quotes from Harsh Gujarati + the freshly-seeded demo quote.
 - New tests authored at `/app/backend/tests/test_iteration8_hot_leads_seed.py` (11 cases: auth gates, response shape, status filters, idempotency, admin role gate). Run with `pytest /app/backend/tests/test_iteration8_hot_leads_seed.py -v`.
+
+
+## Test-Mode Outbound Restriction — 2026-02 (iteration_10)
+- **Why**: Local environment runs against the *live* DB backup. We must guarantee real customers cannot accidentally receive WhatsApp/Email messages during admin testing.
+- **Env-controlled**: Two new env vars in `/app/backend/.env`:
+  - `RESTRICT_OUTBOUND_TO_PHONE=+918200663263` (set — all WA outbound is redirected here)
+  - `RESTRICT_OUTBOUND_TO_EMAIL=` (empty — email routes through normally; set to a test inbox to restrict)
+- **Chokepoint enforcement** (no bypass route exists):
+  - `services/integrations.py` — added `_redirect_phone()` / `_redirect_email()` helpers, applied at the entry of `send_whatsapp_template`, `send_whatsapp_text`, `send_whatsapp_document`, `send_smtp_email`.
+  - `whatsapp_bot.py::_bizchat_post` — also redirects `payload.phone_number` so bot replies cannot reach real customers either.
+  - Every redirected send emits a `logger.warning("[TEST-MODE] ...")` line capturing the original target → override mapping.
+- **Admin UI banner**: `DashboardLayout.jsx` fetches `/api/settings/integrations` and renders a sticky amber banner with `data-testid="test-mode-banner"` listing the restricted phone/email. Visible on every admin page when either env var is set.
+- **Backend surfacing**: `GET /api/settings/integrations` now includes a `test_mode: { restrict_outbound_phone, restrict_outbound_email }` object so any client can detect mode.
+- **Removal for production**: To go live, remove (or blank) the two env vars in `/app/backend/.env` and restart backend. The banner auto-hides; no code changes required.
+- **Tests**: `/app/backend/tests/test_iteration10_testmode_outbound.py` — 9 cases, all pass. Monkeypatches `httpx.AsyncClient` so unit tests never hit BizChat. Combined with iter_9 regression: 42/42 backend green.
