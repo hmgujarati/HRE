@@ -416,3 +416,11 @@ Per user request matching the supplied taxinvoice (1).pdf reference:
 - **Backend surfacing**: `GET /api/settings/integrations` now includes a `test_mode: { restrict_outbound_phone, restrict_outbound_email }` object so any client can detect mode.
 - **Removal for production**: To go live, remove (or blank) the two env vars in `/app/backend/.env` and restart backend. The banner auto-hides; no code changes required.
 - **Tests**: `/app/backend/tests/test_iteration10_testmode_outbound.py` — 9 cases, all pass. Monkeypatches `httpx.AsyncClient` so unit tests never hit BizChat. Combined with iter_9 regression: 42/42 backend green.
+
+## Password Length Hardening (bcrypt crash fix) — 2026-02 (iteration_11)
+- **Bug**: Submitting a long password (>72 bytes) on /api/auth/login or /api/auth/change-password triggered bcrypt's hard 72-byte limit → ValueError → 500 → server crash risk.
+- **Fix (two-layer)**:
+  - **API edge (Pydantic)**: `LoginIn.password` now `min_length=1, max_length=128`. `ChangePasswordIn.current_password` is `min_length=1, max_length=128`; `new_password` keeps `min_length=8, max_length=128`. Oversize input returns a clean 422.
+  - **Defensive truncation in bcrypt helpers**: `core.hash_password` and `core.verify_password` now slice the input to 72 UTF-8 bytes (`pw.encode('utf-8')[:72]`) before calling bcrypt — belt-and-braces in case any path bypasses Pydantic.
+- **Tests**: `/app/backend/tests/test_iteration11_password_length.py` — 9 cases including a hammer test that loops passwords up to 5000 chars (all return 422, supervisor stays RUNNING). Combined regression: 51/51 backend pass.
+
