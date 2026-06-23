@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import api, { formatApiError, fileUrl } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
-import { ArrowLeft, UploadSimple, Image as ImageIcon, Plus, FileXls, CheckCircle, PencilSimple, Trash, Warning } from "@phosphor-icons/react";
+import { ArrowLeft, UploadSimple, Image as ImageIcon, Plus, FileXls, CheckCircle, PencilSimple, Trash, Warning, WhatsappLogo, Copy } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import VariantFormDialog from "@/components/VariantFormDialog";
 
@@ -200,6 +200,30 @@ export default function ProductFamilyDetail() {
                       {dimKeys.map((k) => <td key={k} className="px-3 py-2 font-mono text-zinc-600">{v.dimensions?.[k] ?? ''}</td>)}
                       <td className="px-4 py-2 text-right font-mono font-bold">₹{v.final_price}</td>
                       <td className="px-4 py-2 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => {
+                            const msg = `${family?.name || 'Product'}\nCode: ${v.product_code}\nCable size: ${v.cable_size}${v.hole_size ? ` · Hole: ${v.hole_size}` : ''}\nPrice: ₹${v.final_price}\n— H R Exporter`;
+                            navigator.clipboard?.writeText(msg).then(
+                              () => toast.success(`Copied ${v.product_code}`),
+                              () => toast.error("Copy failed"),
+                            );
+                          }}
+                          className="text-zinc-400 hover:text-[#1A1A1A] mr-3"
+                          data-testid={`fam-variant-copy-${v.id}`}
+                          title="Copy variant details"
+                        >
+                          <Copy size={14} />
+                        </button>
+                        <a
+                          href={`https://wa.me/?text=${encodeURIComponent(`${family?.name || 'Product'}\nCode: ${v.product_code}\nCable size: ${v.cable_size}${v.hole_size ? ` · Hole: ${v.hole_size}` : ''}\nPrice: ₹${v.final_price}\n— H R Exporter`)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-block text-zinc-400 hover:text-[#25D366] mr-3"
+                          data-testid={`fam-variant-share-wa-${v.id}`}
+                          title="Share on WhatsApp"
+                        >
+                          <WhatsappLogo size={14} />
+                        </a>
                         <button
                           onClick={() => setVariantOpen({ family, existing: v })}
                           className="text-zinc-500 hover:text-[#FBAE17] mr-3"

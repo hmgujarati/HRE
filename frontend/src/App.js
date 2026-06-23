@@ -26,6 +26,7 @@ import PublicCatalogue from "@/pages/public/PublicCatalogue";
 import PublicFamilyDetail from "@/pages/public/PublicFamilyDetail";
 import RequestQuote from "@/pages/public/RequestQuote";
 import MyQuotes from "@/pages/public/MyQuotes";
+import TrackOrder from "@/pages/public/TrackOrder";
 
 function App() {
   return (
@@ -41,6 +42,8 @@ function App() {
             <Route path="/catalogue/:id" element={<PublicFamilyDetail />} />
             <Route path="/request-quote" element={<RequestQuote />} />
             <Route path="/my-quotes" element={<MyQuotes />} />
+            <Route path="/track" element={<TrackOrder />} />
+            <Route path="/track/*" element={<TrackOrder />} />
           </Route>
           {/* Admin app (auth required) */}
           <Route element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>

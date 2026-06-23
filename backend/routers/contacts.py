@@ -122,3 +122,52 @@ async def delete_contact(cid: str, _: dict = Depends(require_role("admin"))):
 @router.get("/contacts/{cid}/quotations")
 async def contact_quotations(cid: str, _: dict = Depends(get_current_user)):
     return await db.quotations.find({"contact_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@router.get("/contacts/{cid}/customer-360")
+async def customer_360(cid: str, _: dict = Depends(get_current_user)):
+    """One-shot view: contact + last 5 quotes + last 3 orders + WA engagement.
+    Optimised for an admin side-panel — single round-trip, no joins on the FE."""
+    contact = await db.contacts.find_one({"id": cid}, {"_id": 0})
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    quotes = await db.quotations.find(
+        {"contact_id": cid},
+        {"_id": 0, "id": 1, "quote_number": 1, "status": 1, "grand_total": 1,
+         "created_at": 1, "sent_at": 1, "approved_at": 1, "dispatch_log": 1, "archived": 1, "version": 1},
+    ).sort("created_at", -1).to_list(5)
+
+    orders = await db.orders.find(
+        {"contact_id": cid},
+        {"_id": 0, "id": 1, "order_number": 1, "stage": 1, "grand_total": 1,
+         "created_at": 1, "updated_at": 1, "quote_id": 1, "expected_completion_date": 1},
+    ).sort("created_at", -1).to_list(3)
+
+    # WhatsApp engagement: scan latest 25 quote dispatch_log entries for WA channel.
+    wa_engagement = {"sent": 0, "delivered": 0, "read": 0, "failed": 0, "last_at": None}
+    recent = await db.quotations.find(
+        {"contact_id": cid},
+        {"_id": 0, "dispatch_log": 1},
+    ).sort("created_at", -1).to_list(25)
+    for q in recent:
+        for ev in (q.get("dispatch_log") or []):
+            if (ev.get("channel") or "").lower() != "whatsapp":
+                continue
+            status = (ev.get("status") or "").lower()
+            if status in wa_engagement and status != "last_at":
+                wa_engagement[status] += 1
+            ts = ev.get("status_at") or ev.get("sent_at") or ev.get("at")
+            if ts and (wa_engagement["last_at"] is None or ts > wa_engagement["last_at"]):
+                wa_engagement["last_at"] = ts
+
+    return {
+        "contact": contact,
+        "quotes": quotes,
+        "orders": orders,
+        "whatsapp_engagement": wa_engagement,
+        "totals": {
+            "quotes_total": await db.quotations.count_documents({"contact_id": cid}),
+            "orders_total": await db.orders.count_documents({"contact_id": cid}),
+        },
+    }

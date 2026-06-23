@@ -688,6 +688,22 @@ def _public_order_summary(order: dict) -> dict:
             "qty_status": li.get("qty_status") or "pending",
             "expected_dispatch_date": li.get("expected_dispatch_date") or "",
         })
+    # Phase-3: shipments — slim public projection (no internal notes, no full doc URLs)
+    public_shipments: List[Dict[str, Any]] = []
+    for sh in (order.get("shipments") or []):
+        sh_docs = sh.get("documents") or {}
+        public_shipments.append({
+            "id": sh.get("id"),
+            "shipment_number": sh.get("shipment_number") or "",
+            "stage": sh.get("stage") or "draft",
+            "line_indexes": sh.get("line_indexes") or [],
+            "transporter_name": sh.get("transporter_name") or "",
+            "lr_number": sh.get("lr_number") or "",
+            "dispatched_at": sh.get("dispatched_at"),
+            "invoice_url": (sh_docs.get("invoice") or {}).get("url") or "",
+            "eway_url": (sh_docs.get("eway") or {}).get("url") or "",
+            "lr_url": (sh_docs.get("lr") or {}).get("url") or "",
+        })
     return {
         "order_number": order.get("order_number"),
         "stage": stage,
@@ -748,6 +764,63 @@ async def public_quote_view(qid: str, token: str):
     if not contact or contact.get("phone_norm") not in (pn, f"91{pn}"):
         raise HTTPException(status_code=403, detail="This quote does not belong to your phone")
     return quote
+
+
+@api.get("/public/track/{order_number:path}")
+async def public_track_order(order_number: str, phone: Optional[str] = None):
+    """No-auth deep-link tracker. Returns a slim public summary for an order
+    looked up by its human-readable order_number (e.g. HRE/ORD/2026-27/0042).
+    Optionally pass `?phone=<last10>` to authorise display of customer details;
+    without phone match, only the high-level milestone status is returned.
+
+    Order numbers contain `/` so the path uses the `:path` converter.
+    Alternative call shape (more reliable through some ingresses):
+      GET /api/public/track?order_number=HRE/ORD/2026-27/0042
+    """
+    decoded = order_number.replace("%2F", "/").strip().strip("/")
+    order = await db.orders.find_one({"order_number": decoded}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    summary = _public_order_summary(order)
+    # Slim public response by default — strip PII and document URLs
+    public_resp = {
+        "order_number": summary.get("order_number"),
+        "stage": summary.get("stage"),
+        "stage_label": summary.get("stage_label"),
+        "stage_index": summary.get("stage_index"),
+        "total_stages": summary.get("total_stages"),
+        "milestones": summary.get("milestones"),
+        "expected_completion_date": summary.get("expected_completion_date"),
+        "updated_at": summary.get("updated_at"),
+        "dispatched_at": summary.get("dispatched_at"),
+        "transporter_name": summary.get("transporter_name"),
+        "lr_number": summary.get("lr_number"),
+        "verified": False,
+    }
+    # If phone provided AND matches contact, expand with line items + shipments
+    if phone:
+        pn = _norm_phone(phone)
+        if len(pn) == 10:
+            contact = await db.contacts.find_one({"id": order.get("contact_id")}, {"_id": 0})
+            if contact and contact.get("phone_norm") in (pn, f"91{pn}"):
+                public_resp.update({
+                    "verified": True,
+                    "po_number": summary.get("po_number"),
+                    "proforma_number": summary.get("proforma_number"),
+                    "invoice_url": summary.get("invoice_url"),
+                    "lr_url": summary.get("lr_url"),
+                    "line_status": summary.get("line_status"),
+                    "shipments": summary.get("shipments"),
+                })
+    return public_resp
+
+
+@api.get("/public/track")
+async def public_track_order_q(order_number: str, phone: Optional[str] = None):
+    """Query-string variant of /public/track/{order_number} — friendlier to
+    ingresses that mangle URL-encoded slashes in the path."""
+    return await public_track_order(order_number, phone)
 
 
 # ----- Customer-side PO submission -----
@@ -829,6 +902,79 @@ async def _notify_admin_po_received(order: dict, quote: dict, contact: dict, has
         except Exception as e:
             wa_err = str(e)
             logger.exception("[customer-po-notify] whatsapp failed")
+
+    return {"email": email_ok, "email_error": email_err, "whatsapp": wa_ok, "whatsapp_error": wa_err}
+
+
+async def _ack_customer_po_received(order: dict, quote: dict, contact: dict, has_file: bool):
+    """Send the CUSTOMER a 'We got your PO' acknowledgement via WhatsApp + Email.
+    This is the P2 ack — best-effort, never raises (must not break the submit path).
+    Honours test-mode redirect (RESTRICT_OUTBOUND_TO_PHONE) via the integration layer.
+    """
+    settings = await _get_integrations()
+    sm = settings["smtp"]
+    wa = settings["whatsapp"]
+    name = (contact.get("name") or "").strip() or "Customer"
+    quote_no = quote.get("quote_number") or ""
+    order_no = order.get("order_number") or ""
+    company = (contact.get("company") or "").strip()
+
+    email_ok = False
+    email_err = None
+    to_email = (contact.get("email") or "").strip()
+    if to_email and sm.get("enabled") and sm.get("host") and sm.get("username") and sm.get("password") and sm.get("from_email"):
+        subject = f"PO received — quote {quote_no} (H R Exporter)"
+        body_text = (
+            f"Hello {name},\n\n"
+            f"We've received your Purchase Order against quote {quote_no}"
+            f"{f' for {company}' if company else ''}.\n"
+            f"Internal order reference: {order_no}\n\n"
+            "Our team will review and acknowledge it within one business day. "
+            "You can also track the order in real time at https://hrexporter.com/my-quotes.\n\n"
+            f"Attachment: {'received' if has_file else 'instructions only — no PDF was attached'}\n\n"
+            "Thank you for choosing H R Exporter.\n"
+            "— HRExporter\nAn ISO 9001:2015 Certified Company"
+        )
+        body_html = (
+            f"<p>Hello {name},</p>"
+            f"<p>We've received your Purchase Order against quote <b>{quote_no}</b>"
+            f"{f' for <b>{company}</b>' if company else ''}.<br>"
+            f"Internal order reference: <b>{order_no}</b></p>"
+            "<p>Our team will review and acknowledge it within one business day. "
+            "You can also track the order in real time at "
+            "<a href='https://hrexporter.com/my-quotes'>my-quotes</a>.</p>"
+            f"<p>Attachment: {'received' if has_file else 'instructions only — no PDF was attached'}</p>"
+            "<p>Thank you for choosing H R Exporter.<br>— HRExporter<br>"
+            "<i>An ISO 9001:2015 Certified Company</i></p>"
+        )
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None, _send_smtp_email, sm, to_email, subject, body_text, None, body_html,
+            )
+            email_ok = True
+        except Exception as e:
+            email_err = str(e)
+            logger.exception("[customer-po-ack] email failed")
+
+    wa_ok = False
+    wa_err = None
+    to_phone = (contact.get("phone") or contact.get("phone_norm") or "").strip()
+    if to_phone and wa.get("enabled") and wa.get("vendor_uid") and wa.get("token"):
+        # Use a plain free-form text — works inside 24h customer-initiated window
+        # (the customer just submitted the PO, so we're well inside that window).
+        try:
+            msg = (
+                f"Hello {name}, we've received your PO for quote {quote_no}. "
+                f"Order ref: {order_no}. Our team will acknowledge it within 1 business day. "
+                "Track at https://hrexporter.com/my-quotes — H R Exporter"
+            )
+            await _send_whatsapp_text(wa, to_phone, msg)
+            wa_ok = True
+        except Exception as e:
+            wa_err = str(e)
+            logger.exception("[customer-po-ack] whatsapp failed")
 
     return {"email": email_ok, "email_error": email_err, "whatsapp": wa_ok, "whatsapp_error": wa_err}
 
@@ -937,6 +1083,7 @@ async def public_submit_po(
     # Refresh order for notification
     fresh = await db.orders.find_one({"id": oid}, {"_id": 0})
     notify = await _notify_admin_po_received(fresh, quote, contact, has_file, instructions)
+    customer_ack = await _ack_customer_po_received(fresh, quote, contact, has_file)
 
     return {
         "ok": True,
@@ -946,6 +1093,7 @@ async def public_submit_po(
         "had_existing_order": not created_now,
         "po_attached": has_file,
         "admin_notified": notify,
+        "customer_acknowledged": customer_ack,
     }
 
 
@@ -1334,6 +1482,7 @@ from routers import quotations as _quotations_router  # noqa: E402
 from routers import orders as _orders_router  # noqa: E402
 # Phase 3 — shipments
 from routers import shipments as _shipments_router  # noqa: E402
+from routers import health as _health_router  # noqa: E402
 
 api.include_router(_auth_router.router)
 api.include_router(_materials_router.router)
@@ -1348,6 +1497,7 @@ api.include_router(_contacts_router.router)
 api.include_router(_quotations_router.router)
 api.include_router(_orders_router.router)
 api.include_router(_shipments_router.router)
+api.include_router(_health_router.router)
 
 
 # Mount the API router AFTER all routes are registered

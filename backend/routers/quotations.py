@@ -352,3 +352,68 @@ async def delete_quotation(qid: str, _: dict = Depends(require_role("admin"))):
         )
     await db.quotations.delete_one({"id": qid})
     return {"ok": True, "deleted": True}
+
+
+
+@router.get("/quotations/{qid}/diff/{other_qid}")
+async def diff_quotations(qid: str, other_qid: str,
+                          _: dict = Depends(require_role("admin", "manager"))):
+    """Compare two revisions (or any two quotes) — returns line and price deltas.
+    `qid` = newer, `other_qid` = older (typically `parent_quote_id`).
+    """
+    newer = await db.quotations.find_one({"id": qid}, {"_id": 0})
+    older = await db.quotations.find_one({"id": other_qid}, {"_id": 0})
+    if not newer or not older:
+        raise HTTPException(status_code=404, detail="One or both quotations not found")
+    if newer.get("contact_id") != older.get("contact_id"):
+        raise HTTPException(status_code=400, detail="Cannot diff quotes from different contacts")
+
+    def _index(items):
+        return {(li.get("product_code") or li.get("description") or f"row{i}"): li
+                for i, li in enumerate(items or [])}
+
+    new_idx = _index(newer.get("line_items"))
+    old_idx = _index(older.get("line_items"))
+    all_keys = list(dict.fromkeys(list(old_idx.keys()) + list(new_idx.keys())))
+
+    line_diff = []
+    for key in all_keys:
+        a = old_idx.get(key)
+        b = new_idx.get(key)
+        if a and not b:
+            line_diff.append({"product_code": key, "change": "removed", "before": a, "after": None})
+        elif b and not a:
+            line_diff.append({"product_code": key, "change": "added", "before": None, "after": b})
+        else:
+            changed_fields = {}
+            for f in ("quantity", "unit_price", "discount", "tax_rate", "line_total", "description"):
+                if (a.get(f) or 0) != (b.get(f) or 0) if isinstance(a.get(f), (int, float)) else a.get(f) != b.get(f):
+                    changed_fields[f] = {"before": a.get(f), "after": b.get(f)}
+            if changed_fields:
+                line_diff.append({"product_code": key, "change": "modified",
+                                  "before": a, "after": b, "changed_fields": changed_fields})
+            else:
+                line_diff.append({"product_code": key, "change": "unchanged",
+                                  "before": a, "after": b})
+
+    totals_diff = {}
+    for f in ("subtotal", "tax_total", "grand_total", "discount_total"):
+        before = older.get(f) or 0
+        after = newer.get(f) or 0
+        if before != after:
+            totals_diff[f] = {"before": before, "after": after, "delta": after - before}
+
+    return {
+        "newer": {"id": newer["id"], "quote_number": newer.get("quote_number"),
+                  "version": newer.get("version"), "created_at": newer.get("created_at")},
+        "older": {"id": older["id"], "quote_number": older.get("quote_number"),
+                  "version": older.get("version"), "created_at": older.get("created_at")},
+        "line_diff": line_diff,
+        "totals_diff": totals_diff,
+        "summary": {
+            "added": sum(1 for x in line_diff if x["change"] == "added"),
+            "removed": sum(1 for x in line_diff if x["change"] == "removed"),
+            "modified": sum(1 for x in line_diff if x["change"] == "modified"),
+            "unchanged": sum(1 for x in line_diff if x["change"] == "unchanged"),
+        },
+    }
