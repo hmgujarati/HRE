@@ -166,6 +166,14 @@ async def _bizchat_post(wa: dict, path: str, payload: dict) -> dict:
     token = wa.get("token")
     if not (base and vendor and token):
         raise RuntimeError("BizChat is not configured")
+    # Test-mode outbound restriction: redirect ALL replies to the test phone
+    # when RESTRICT_OUTBOUND_TO_PHONE env var is set. Keeps real customers
+    # from receiving accidental bot replies while we're working on a live DB.
+    import os
+    override = (os.environ.get("RESTRICT_OUTBOUND_TO_PHONE") or "").strip()
+    if override and payload.get("phone_number") and payload["phone_number"] != override:
+        logger.warning(f"[TEST-MODE] bot reply redirected: {payload['phone_number']} → {override}")
+        payload["phone_number"] = override
     url = f"{base}/{vendor}/contact/{path}"
     if wa.get("from_phone_number_id"):
         payload.setdefault("from_phone_number_id", wa["from_phone_number_id"])

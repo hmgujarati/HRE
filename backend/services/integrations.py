@@ -7,6 +7,7 @@ Stateless functions called from `services/dispatch.py`, `routers/settings.py`,
 from __future__ import annotations
 import hashlib
 import logging
+import os
 import re
 import secrets
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,6 +18,38 @@ from fastapi import HTTPException
 from core import OTP_TTL_SECONDS, SETTINGS_DOC_ID, db, now_iso
 
 logger = logging.getLogger("hre.integrations")
+
+
+# ─────────────────── Test-mode outbound restriction ───────────────────
+# When RESTRICT_OUTBOUND_TO_PHONE / RESTRICT_OUTBOUND_TO_EMAIL are set in .env,
+# ALL outbound WhatsApp / SMTP traffic gets re-routed to those test recipients
+# regardless of the original target. This protects real customers from receiving
+# accidental test messages while we are working against a live database backup.
+
+def _test_phone_override() -> Optional[str]:
+    val = (os.environ.get("RESTRICT_OUTBOUND_TO_PHONE") or "").strip()
+    return val or None
+
+
+def _test_email_override() -> Optional[str]:
+    val = (os.environ.get("RESTRICT_OUTBOUND_TO_EMAIL") or "").strip()
+    return val or None
+
+
+def _redirect_phone(original: str) -> str:
+    override = _test_phone_override()
+    if override and override != original:
+        logger.warning(f"[TEST-MODE] WA outbound redirected: {original} → {override}")
+        return override
+    return original
+
+
+def _redirect_email(original: str) -> str:
+    override = _test_email_override()
+    if override and override != original:
+        logger.warning(f"[TEST-MODE] SMTP outbound redirected: {original} → {override}")
+        return override
+    return original
 
 
 DEFAULT_INTEGRATIONS = {
@@ -132,6 +165,7 @@ async def send_whatsapp_template(
 ) -> dict:
     if not (wa.get("enabled") and wa.get("vendor_uid") and wa.get("token") and template_name):
         raise HTTPException(status_code=503, detail="WhatsApp integration is not configured")
+    phone = _redirect_phone(phone)
     url = f"{wa['api_base_url'].rstrip('/')}/{wa['vendor_uid']}/contact/send-template-message"
     payload: Dict[str, Any] = {
         "from_phone_number_id": wa.get("from_phone_number_id") or "",
@@ -193,6 +227,7 @@ async def get_whatsapp_message_status(wa: dict, wamid: str) -> dict:
 async def send_whatsapp_text(wa: dict, phone: str, message: str) -> dict:
     if not (wa.get("enabled") and wa.get("vendor_uid") and wa.get("token")):
         raise HTTPException(status_code=503, detail="WhatsApp integration is not configured")
+    phone = _redirect_phone(phone)
     url = f"{wa['api_base_url'].rstrip('/')}/{wa['vendor_uid']}/contact/send-message"
     payload = {
         "from_phone_number_id": wa.get("from_phone_number_id") or "",
@@ -233,6 +268,7 @@ async def send_whatsapp_document(
 ) -> dict:
     if not (wa.get("enabled") and wa.get("vendor_uid") and wa.get("token")):
         raise HTTPException(status_code=503, detail="WhatsApp integration is not configured")
+    phone = _redirect_phone(phone)
     url = f"{wa['api_base_url'].rstrip('/')}/{wa['vendor_uid']}/contact/send-media-message"
     payload = {
         "from_phone_number_id": wa.get("from_phone_number_id") or "",
@@ -267,6 +303,7 @@ def send_smtp_email(
     from email.mime.text import MIMEText
     from email.utils import formataddr
 
+    to_email = _redirect_email(to_email)
     outer = MIMEMultipart("mixed")
     outer["Subject"] = subject
     outer["From"] = formataddr((sm.get("from_name") or "HRE Exporter", sm["from_email"]))

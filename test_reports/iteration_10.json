@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 10 — verified TEST-MODE outbound restriction + admin UI banner + regression. Created /app/backend/tests/test_iteration10_testmode_outbound.py (9 tests) covering: (a) GET /api/settings/integrations surfaces test_mode.restrict_outbound_phone='+918200663263'; (b) _redirect_phone/_redirect_email helpers correctly override / no-op based on env; (c) send_whatsapp_template, send_whatsapp_text, send_whatsapp_document ALL emit payloads whose phone_number is normalised to the test phone — verified by monkeypatching httpx.AsyncClient so NO real BizChat call is made; (d) whatsapp_bot._bizchat_post rewrites payload.phone_number to the test phone. Re-ran the iter_9 regression suite (33 tests) — ALL PASS. Combined: 42/42 backend pass. Frontend smoke: logged in as admin, navigated all 11 admin routes — sticky amber [data-testid=test-mode-banner] is present on EACH page with text 'TEST MODE ACTIVE' and '+918200663263' visible. No 5xx network errors, no JS page errors. Spot-checked critical CTAs: 'Seed Demo Data' (Dashboard), Pricing-Chart priceless toggle, Settings tabs (WhatsApp/SMTP/Catalogue) all visible and rendered. No real outbound WA/Email sends triggered during this iteration.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/settings/integrations", "issue": "test_mode.restrict_outbound_email returned as empty string '' (env unset). Frontend banner handles this fine — only the phone leg renders. Flagging only because the spec wording said the field should be present (it is)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Multiple admin pages", "issues": ["~36 console 404s for static lug/variant images on Dashboard and Pricing-Chart routes — pre-existing (uploads missing on this env), NOT related to iter_10 changes. Banner / API integrations are clean."]},
+      {"screen": "Pricing Chart", "issues": ["Priceless toggle button label is 'REACTIVATE PRICELESS (600)' (state-aware smart label). Spec said literal 'Toggle Priceless' — this is a known cosmetic drift carried from iter_9, functionally correct."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration10_testmode_outbound.py",
+    "/app/backend/tests/test_iteration9_phase123.py",
+    "/app/test_reports/pytest/iteration10.xml"
+  ],
+  "action_items": [
+    "No blockers. Test-mode override + UI banner work end-to-end. Real customers cannot receive WA/Email — all outbound funnels through _redirect_phone / _redirect_email / _bizchat_post override.",
+    "(non-blocking) Static asset 404s for /api/uploads/* lug images persist on this env — main agent may want to seed those upload files OR add a placeholder image fallback so the console isn't noisy.",
+    "(non-blocking) Consider adding a runtime self-check on startup that logs ['TEST-MODE active: outbound→+918200663263'] so ops always knows the mode."
+  ],
+  "critical_code_review_comments": [
+    "services/integrations.py: _redirect_phone reads env var at every call — fine for runtime toggling, but could be cached at module import for marginal speedup. Not a bug.",
+    "whatsapp_bot._bizchat_post does an inline `import os` inside the function — works, but reads env on every send. If main agent wants to centralise, move to a single integrations._test_phone_override() call so there's one source of truth.",
+    "send_smtp_email: _redirect_email is applied BEFORE building the MIME 'To' header — correct. But sm['from_email'] is NOT redirected (sender), which is intentional but worth a one-line comment so future maintainers don't 'fix' it.",
+    "DashboardLayout fetches /api/settings/integrations on every dashboard mount — fine, but if banner persistence ever flickers on slow networks, consider hoisting into a top-level context or caching in localStorage with a 60s TTL.",
+    "Carry-over from iter_9: routers/orders.py at 599 lines is still close to the 700-line ceiling. No new growth this iteration."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration10_testmode_outbound.py (NEW — 9 tests, all pass)"
+  ],
+  "success_rate": {
+    "backend": "42/42 (100%) — 9 new iter_10 tests + 33 iter_9 regression tests.",
+    "frontend": "Banner verified on 11/11 admin pages. No page-level JS errors, no backend 5xx. Static-image 404s present (pre-existing, out of scope)."
+  },
+  "test_credentials": "admin@hrexporter.com / Admin@123 (from /app/memory/test_credentials.md). Restricted test phone: +918200663263.",
+  "seed_data_creation": "No new seed data. Reused iter_9 ephemeral fixtures (gujarat_quote_and_order) which create + clean up TEST_ prefixed contacts/quotes/orders within the run. Live DB untouched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "To re-run iter_10: `pytest /app/backend/tests/test_iteration10_testmode_outbound.py -v`. The unit tests use monkeypatch on httpx.AsyncClient so they DO NOT hit BizChat. The API-level test only reads GET /api/settings/integrations and does NOT trigger any send. If RESTRICT_OUTBOUND_TO_PHONE is ever removed from /app/backend/.env, the banner will disappear and test_settings_integrations_exposes_test_mode will fail — that is the intended fail-safe.",
+  "rca of the issue": "N/A — this iteration was a verification pass. The redirect chain is sound: env var → integrations._redirect_phone (called at entry of send_whatsapp_template/text/document and send_smtp_email) AND whatsapp_bot._bizchat_post (catches bot replies). I audited the codebase for direct httpx.post calls to BizChat: only the two paths above (services/integrations.py and whatsapp_bot.py) reach BizChat — no bypass route exists. Both call _redirect_phone before the HTTP layer."
+}

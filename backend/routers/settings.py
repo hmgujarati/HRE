@@ -112,7 +112,14 @@ def _with_webhook_url(resp: dict, secret: str, request: Optional[Request] = None
 @router.get("/settings/integrations")
 async def get_integrations_endpoint(request: Request, _: dict = Depends(require_role("admin", "manager"))):
     cur = await get_integrations()
-    return _with_webhook_url(public_integrations(cur), cur["whatsapp"].get("webhook_secret", ""), request)
+    resp = _with_webhook_url(public_integrations(cur), cur["whatsapp"].get("webhook_secret", ""), request)
+    # Surface test-mode outbound restriction so admin UI can show a clear banner.
+    import os
+    resp["test_mode"] = {
+        "restrict_outbound_phone": (os.environ.get("RESTRICT_OUTBOUND_TO_PHONE") or "").strip(),
+        "restrict_outbound_email": (os.environ.get("RESTRICT_OUTBOUND_TO_EMAIL") or "").strip(),
+    }
+    return resp
 
 
 @router.put("/settings/integrations")
