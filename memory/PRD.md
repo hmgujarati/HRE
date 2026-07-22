@@ -447,3 +447,12 @@ All remaining backlog items shipped in one batch. 67/67 backend tests pass; no r
 
 ### Refactor recommended (not blocking)
 - `backend/server.py` is now 1505 lines. Public endpoints (`/public/track`, `/public/quote/{qid}/submit-po`, `_public_order_summary`, `_notify_admin_po_received`, `_ack_customer_po_received`) should move to a new `routers/public.py` module. The recurring NameError on `public_shipments` is symptomatic of inline edits to an oversized file.
+
+## DD/MM/YYYY Rollout — 2026-02 (iteration_13)
+- Frontend `lib/dates.js` — `toDmy` now emits `DD/MM/YYYY`; `fromDmy` accepts both `/` and `-` (backward-compatible with any bookmarked URLs / old copy-paste values).
+- Frontend `en-GB` locale used for all `toLocaleDateString()` calls in Dashboard, Quotations, Orders, ContactDetail, MyQuotes so browser-default locales don't leak `MM/DD/YYYY`.
+- OrderView.jsx — every placeholder, hint and error toast now says `DD/MM/YYYY`.
+- Backend `quote_pdf.py::_format_date_dmy` — `%d/%m/%Y` (also expanded to 4-digit year).
+- Backend `services/dispatch.py` and `server.py` — all 5 human-facing `strftime` calls now use `%d/%m/%Y`.
+- Verified via PDF download (pdfplumber-parsed) + UI grep: 0 occurrences of dash-format dates remain in scope.
+- Tests: `tests/test_iteration13_date_format_ddmmyyyy.py` (6 pass); regression 67/67.

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from jinja2 import Environment, BaseLoader, select_autoescape
 from weasyprint import HTML
 
