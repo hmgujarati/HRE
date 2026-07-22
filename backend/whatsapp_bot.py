@@ -1246,7 +1246,7 @@ async def dispatch(*, db, wa: dict, sm: dict, settings_doc: dict, msg: Dict[str,
                     f"✅ Done!\n\n*Quotation {qno}* generated.\n"
                     f"Total: *₹{grand:,.2f}* _(GST included)_\n\n"
                     "Quote PDF is on its way to your WhatsApp + email.\n"
-                    "Our team will review and approve it shortly. Once approved you'll be able to upload your PO from hrexporter.com/my-quotes.\n\n"
+                    f"Our team will review and approve it shortly. Once approved you'll be able to upload your PO from {PUBLIC_BASE_URL or 'quote.hrexporter.com'}/my-quotes.\n\n"
                     "Type 'menu' to start a new request."
                 )
                 await _save_session(db, phone_norm, ST_FINALIZED,

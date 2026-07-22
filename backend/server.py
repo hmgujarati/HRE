@@ -929,8 +929,8 @@ async def _ack_customer_po_received(order: dict, quote: dict, contact: dict, has
             f"We've received your Purchase Order against quote {quote_no}"
             f"{f' for {company}' if company else ''}.\n"
             f"Internal order reference: {order_no}\n\n"
-            "Our team will review and acknowledge it within one business day. "
-            "You can also track the order in real time at https://hrexporter.com/my-quotes.\n\n"
+            f"Our team will review and acknowledge it within one business day. "
+            f"You can also track the order in real time at {PUBLIC_BASE_URL}/my-quotes.\n\n"
             f"Attachment: {'received' if has_file else 'instructions only — no PDF was attached'}\n\n"
             "Thank you for choosing H R Exporter.\n"
             "— HRExporter\nAn ISO 9001:2015 Certified Company"
@@ -942,7 +942,7 @@ async def _ack_customer_po_received(order: dict, quote: dict, contact: dict, has
             f"Internal order reference: <b>{order_no}</b></p>"
             "<p>Our team will review and acknowledge it within one business day. "
             "You can also track the order in real time at "
-            "<a href='https://hrexporter.com/my-quotes'>my-quotes</a>.</p>"
+            f"<a href='{PUBLIC_BASE_URL}/my-quotes'>my-quotes</a>.</p>"
             f"<p>Attachment: {'received' if has_file else 'instructions only — no PDF was attached'}</p>"
             "<p>Thank you for choosing H R Exporter.<br>— HRExporter<br>"
             "<i>An ISO 9001:2015 Certified Company</i></p>"
@@ -968,7 +968,7 @@ async def _ack_customer_po_received(order: dict, quote: dict, contact: dict, has
             msg = (
                 f"Hello {name}, we've received your PO for quote {quote_no}. "
                 f"Order ref: {order_no}. Our team will acknowledge it within 1 business day. "
-                "Track at https://hrexporter.com/my-quotes — H R Exporter"
+                f"Track at {PUBLIC_BASE_URL}/my-quotes — H R Exporter"
             )
             await _send_whatsapp_text(wa, to_phone, msg)
             wa_ok = True

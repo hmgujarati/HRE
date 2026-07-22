@@ -173,6 +173,7 @@ async def send_universal_update(
     attach_choice: str = "none",
     preset_id: Optional[str] = None,
     also_email: bool = True,
+    attachment_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Send the universal update via WhatsApp (+ optional email mirror).
     Returns a dict with `whatsapp` + `email` deliveries and any errors. Persists
@@ -195,7 +196,7 @@ async def send_universal_update(
         body_lines = list(body_lines) + [""] * (5 - len(body_lines))
     body_lines = _sanitise(body_lines[:5])
 
-    attachment = _resolve_attachment(order, attach_choice)
+    attachment = attachment_override or _resolve_attachment(order, attach_choice)
     template_name = (template_doc if attachment else template_text) or ""
 
     result: Dict[str, Any] = {
@@ -374,6 +375,25 @@ async def auto_send_preset(
     trigger source so the admin can audit which events fired."""
     try:
         body_lines = resolve_preset_tokens(preset_id, order, line=line, shipment=shipment)
+        # Append a track-status link so the customer can click through to the
+        # live public tracker. Uses PUBLIC_BASE_URL to hit the right domain.
+        if PUBLIC_BASE_URL and order.get("order_number"):
+            from urllib.parse import quote as _qp
+            track_url = f"{PUBLIC_BASE_URL}/track?order_number={_qp(order['order_number'], safe='')}"
+            # Fold the URL onto the last empty line (if any) so we don't blow past 5 vars.
+            for i in range(len(body_lines) - 1, -1, -1):
+                if body_lines[i] == EMPTY_PLACEHOLDER or not body_lines[i].strip():
+                    body_lines[i] = f"Track live: {track_url}"
+                    break
+
+        # Shipment-aware attachment: for shipment_dispatched, attach the
+        # shipment's own Tax Invoice (or E-way Bill / LR if present). The
+        # order-level ATTACH_CHOICES resolver can't reach shipment.documents.*,
+        # so we resolve it here and pass through as attachment_override.
+        attachment_override = None
+        if shipment and preset_id == "shipment_dispatched":
+            attachment_override = _resolve_shipment_attachment(order, shipment)
+
         attach = AUTO_ATTACH_BY_PRESET.get(preset_id, "none")
         result = await send_universal_update(
             order=order,
@@ -381,6 +401,7 @@ async def auto_send_preset(
             attach_choice=attach,
             preset_id=preset_id,
             also_email=also_email,
+            attachment_override=attachment_override,
         )
         entry = {
             "kind": "auto_universal_update",
@@ -402,4 +423,25 @@ async def auto_send_preset(
     except Exception:
         logger.exception("[auto_send_preset] failed for preset %s on order %s", preset_id, oid)
         return None
+
+
+def _resolve_shipment_attachment(order: Dict[str, Any], shipment: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Attach the shipment's Tax Invoice (preferred). Falls back to E-Way Bill,
+    then LR Copy if invoice isn't uploaded. Returns None if no doc is available."""
+    docs = shipment.get("documents") or {}
+    for key, label in (("tax_invoice", "Tax_Invoice"), ("eway_bill", "E-Way_Bill"), ("lr_copy", "LR_Copy")):
+        node = docs.get(key)
+        if node and isinstance(node, dict) and node.get("url"):
+            url = node["url"]
+            rel = url
+            if url.startswith("/") and PUBLIC_BASE_URL:
+                url = f"{PUBLIC_BASE_URL.rstrip('/')}{url}"
+            ship_no = (shipment.get("shipment_number") or "shipment").replace("/", "_")
+            out: Dict[str, Any] = {"url": url, "filename": f"{label}_{ship_no}.pdf"}
+            if rel.startswith("/api/uploads/"):
+                local = UPLOAD_DIR / rel.replace("/api/uploads/", "", 1)
+                if local.exists():
+                    out["local_path"] = local
+            return out
+    return None
 

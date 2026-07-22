@@ -1,0 +1,35 @@
+{
+  "summary": "Verified PUBLIC_BASE_URL sweep + shipment auto-notify PDF attach fix. 8/9 iter15 new tests pass, 3 skipped due to only-1-line DB fixture (already fully shipped/delivered). Regression: 84/86 iter9-14 pass, 2 skipped (same free-line reason from iter14). Discovered and fixed one bug; discovered a second bug that must be fixed by main agent.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "services/universal_update.py::auto_send_preset", "issue": "Track-link injection only replaces EMPTY body lines (`body_lines[i] == EMPTY_PLACEHOLDER or not body_lines[i].strip()`). All 6 built-in presets (item_in_production, item_ready, shipment_dispatched, shipment_delivered, schedule_revision, pi_issued) have ALL 5 lines pre-filled with content -> the loop never matches and the 'Track live: ...' link is NEVER appended. Confirmed live on DB order HRE/ORD/2026-27/0001: notifications entries for item_in_production/schedule_revision have vars WITHOUT any 'Track live' line. Fix: append as an additional line (or replace last line unconditionally). Currently only the 'custom' preset would get the track link.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration15_public_url_and_shipment_attach.py",
+    "/app/test_reports/pytest/iter15_regression.xml"
+  ],
+  "action_items": [
+    "MAIN AGENT: Fix auto_send_preset in /app/backend/services/universal_update.py so the 'Track live: <url>' line is ACTUALLY appended for the shipped presets. The current empty-line-fold logic is a no-op because resolve_preset_tokens returns all 5 filled lines. Suggested fix: after resolving body lines, if none is empty, replace body_lines[4] (or append and truncate) with the track link. Then verify via unit test TestAutoSendPresetAppendsTrackLink (already written).",
+    "MAIN AGENT: Consider seeding an extra order or line item so iteration14 & iteration15 shipment E2E tests don't skip (currently 1 order / 1 line in DB, already delivered)."
+  ],
+  "critical_code_review_comments": [
+    "BUG (fixed by testing agent): _resolve_shipment_attachment used lookup keys ('invoice', 'eway', 'lr') but shipment.documents actually uses ('tax_invoice', 'eway_bill', 'lr_copy') per SHIP_DOC_KEYS in services/shipments.py. Fix applied: /app/backend/services/universal_update.py:432 -> corrected the key tuple. Without this fix _resolve_shipment_attachment would ALWAYS return None and the shipment auto-notify would remain text-only despite uploaded PDFs.",
+    "BUG (reported, NOT fixed): track-link injection in auto_send_preset only folds onto empty body lines; all built-in presets have 5 filled lines so the URL is never added. See critical backend issue above.",
+    "Legacy shipment documents on DB order HRE/ORD/2026-27/0001 have URLs pointing at the OLD preview host (quotation-system-20.preview.emergentagent.com). New uploads will use the new PUBLIC_BASE_URL; a one-off migration script could rewrite the stored URLs. Not blocking."
+  ],
+  "updated_files": [
+    "/app/backend/services/universal_update.py (fixed _resolve_shipment_attachment shipment-doc key names to match SHIP_DOC_KEYS: tax_invoice / eway_bill / lr_copy)",
+    "/app/backend/tests/test_iteration15_public_url_and_shipment_attach.py (new — 12 tests for URL sweep, webhook, shipment-attachment fallback, override wiring, track-link, E2E dispatch)",
+    "/app/backend/.env (RESTRICT_OUTBOUND_TO_PHONE / _EMAIL set to safe QA values during the test run, then RESTORED to blank at teardown as required)"
+  ],
+  "success_rate": {"backend": "97% (92 passed of 95: 84 iter9-14 regression + 8 iter15 new; 2 iter14 shipment SKIP + 3 iter15 skip due to fixture / 1 iter15 fail exposing track-link bug)", "frontend": "not tested (backend-only scope)"},
+  "test_credentials": "admin@hrexporter.com / Admin@123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None — reused the single existing production-shaped order (HRE/ORD/2026-27/0001).",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 15 confirmed: (a) grep for hrexporter.com/my-quotes and hrexporter.com/api returns ZERO matches in /app/backend excluding tests+pycache (verified); (b) settings/integrations webhook_url contains quote.hrexporter.com (verified); (c) _resolve_shipment_attachment fallback chain works after the key-name fix (invoice/eway/lr -> tax_invoice/eway_bill/lr_copy); (d) attachment_override correctly forces template_doc over template_text in send_universal_update; (e) OPEN BUG: track-link is never actually injected because all preset body-lines are pre-filled — main agent must change auto_send_preset to append/replace instead of fold-onto-empty. Once main agent fixes track link, re-run backend/tests/test_iteration15_public_url_and_shipment_attach.py to see it go 12/12. E2E shipment attach test requires a fresh (un-shipped) line — either seed a new order or free up the existing line via a soft-delete of the delivered shipment.",
+  "rca of the issue": "auto_send_preset in universal_update.py (lines 380-387) tries to be tidy by only replacing an EMPTY body line with the track URL: `if body_lines[i] == EMPTY_PLACEHOLDER or not body_lines[i].strip(): body_lines[i] = ...; break`. But resolve_preset_tokens returns fully-filled lines for every built-in preset (item_in_production, shipment_dispatched, etc.), so no line qualifies and the break never fires. Verified by inspecting the vars on live notifications entries (HRE/ORD/2026-27/0001) — no 'Track live' present. Recommended fix: always append or unconditionally replace body_lines[-1] with the track URL for auto-triggered sends; the Meta template accepts exactly 5 body vars so replacement is safest."
+}
