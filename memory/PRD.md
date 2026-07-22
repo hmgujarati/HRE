@@ -496,3 +496,31 @@ User reported: (1) new line/shipment auto-notify was text-only (no PDF), (2) lin
 
 ### Known accepted state
 - Legacy shipment documents on order HRE/ORD/2026-27/0001 still have URLs pointing at the OLD preview host. New uploads use the new base. One-off migration script can rewrite if needed — not blocking (customers on that old order will still see working links because the preview host is still reachable).
+
+## State-Appropriate Button Audit — 2026-02 (iterations 18-19)
+User asked for a comprehensive audit: "if a quotation is already clicked for convert to order then it should not show up again". Testing agent ran full state-matrix audit; main agent fixed all surfaced items.
+
+### Fixes landed (iter_18)
+- **Convert-to-Order guard** (`routers/orders.py::create_order_from_quote`):
+  - Backend returns **409** with `{message, order_id, order_number}` when an order already exists for the quote
+  - On success, persists `order_id` + `order_number` back onto the quote document (reverse link)
+  - Backfill script populated the reverse link on all pre-existing converted quotes (1 backfilled)
+- **Frontend Convert button** (`QuotationView.jsx`):
+  - Gated by `!quote.order_id` — hidden after conversion
+  - Replaced with `View Order {order_number}` button that jumps to the linked order
+  - 409 handler in `convertToOrder()` catches the structured error and redirects instead of showing a raw toast
+
+### Fixes landed (iter_19 — this iteration)
+- **Revise button hidden** on already-converted quotes (`QuotationView.jsx` line 184: added `!quote.order_id` gate). Prevents creating a revision of a quote whose order is already in production.
+- **Contact Delete** added to `ContactDetail.jsx`:
+  - Button disabled + tooltip when contact has linked quotes/orders (backend 409 guard was already in place, now surfaced in the UI)
+  - Confirmation modal (`data-testid=contact-delete-confirm-modal`) with Cancel + Confirm
+  - On success, redirects to `/contacts`; on 409, shows the backend's friendly error toast
+
+### Deferred (P3 backlog)
+- 36 pre-existing `/api/uploads/*_main_product_image_*.png|webp` 404s in the console — either backfill the image files, add a migration to null out stale `main_image` refs, or serve a placeholder. Not blocking any user flow.
+
+### Tests
+- `tests/test_iteration18_state_button_audit.py` — 8 tests (7 pass + 1 acceptable skip): convert-to-order 409, back-link persistence, backfill sanity, delete guards, status-precondition rejection, shipment dispatch doc guard, public /my-quotes draft filtering
+- iter_19 re-verification of the 2 medium UX items above → tested via testing_agent_v3_fork
+- Full regression 105+ pass / 0 fail across iter_9 → iter_18
