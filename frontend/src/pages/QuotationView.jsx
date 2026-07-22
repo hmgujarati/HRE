@@ -132,7 +132,14 @@ export default function QuotationView() {
       toast.success(`Order ${r.data.order_number} created`);
       navigate(`/orders/${r.data.id}`);
     } catch (e) {
-      toast.error(formatApiError(e?.response?.data?.detail));
+      // 409 → quote already converted; jump straight to the existing order.
+      const detail = e?.response?.data?.detail;
+      if (e?.response?.status === 409 && detail && typeof detail === "object" && detail.order_id) {
+        toast.info(detail.message || "Quote already converted");
+        navigate(`/orders/${detail.order_id}`);
+        return;
+      }
+      toast.error(formatApiError(detail));
     }
   };
 
@@ -206,9 +213,18 @@ export default function QuotationView() {
               </button>
             </>
           )}
-          {(quote.status === "approved" || quote.status === "sent") && (
+          {(quote.status === "approved" || quote.status === "sent") && !quote.order_id && (
             <button onClick={convertToOrder} className="bg-[#FBAE17] hover:bg-[#E59D12] text-black font-bold uppercase tracking-wider text-xs px-4 py-2 flex items-center gap-2" data-testid="quote-convert-order-btn">
               <Storefront size={14} weight="fill" /> Convert to Order
+            </button>
+          )}
+          {quote.order_id && (
+            <button
+              onClick={() => navigate(`/orders/${quote.order_id}`)}
+              className="bg-[#1A1A1A] hover:bg-[#2a2a2a] text-[#FBAE17] font-bold uppercase tracking-wider text-xs px-4 py-2 flex items-center gap-2"
+              data-testid="quote-view-order-btn"
+            >
+              <Storefront size={14} weight="fill" /> View Order {quote.order_number || ""}
             </button>
           )}
         </div>

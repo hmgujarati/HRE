@@ -211,7 +211,7 @@ class TestAutoSendPresetAppendsTrackLink:
             "lr_number": "LR-1",
             "documents": {"tax_invoice": {"url": "/api/uploads/x/inv.pdf"}},
         }
-        res = asyncio.get_event_loop().run_until_complete(
+        res = asyncio.new_event_loop().run_until_complete(
             uu.auto_send_preset("oid1", "shipment_dispatched", order,
                                 shipment=shipment, also_email=False)
         )
@@ -267,7 +267,7 @@ class TestSendUniversalUpdateOverrideTakesPrecedence:
             "contact_phone": "+911111111111",
         }
         override = {"url": "https://x/y.pdf", "filename": "test.pdf"}
-        res = asyncio.get_event_loop().run_until_complete(
+        res = asyncio.new_event_loop().run_until_complete(
             uu.send_universal_update(
                 order=order,
                 body_lines=["a", "b", "c", "d", "e"],

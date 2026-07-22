@@ -1,0 +1,43 @@
+{
+  "summary": "Comprehensive state-appropriate-button audit for the convert-to-order fix + broad admin surface. Backend regression + new iter18 audit tests: 105 passed / 6 skipped / 0 failed across iter9 → iter15 + iter18. Frontend UI audit confirms the convert-to-order state matrix is correct on all four quote statuses (draft / sent / approved+not-converted / approved+converted). Order view correctly hides advance & shipment-action buttons once the order is delivered. RESTRICT_OUTBOUND_TO_PHONE / _EMAIL set to safe QA values during the run, then RESTORED to blank + backend restarted at teardown.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "QuotationView", "issue": "Revise button remains visible on an already-converted approved quote (status='approved' + order_id set). Clicking Revise creates a new draft revision of a quote whose order is already in production — potentially confusing, though possibly intentional (customer wants a price change → issue a new quote → later create a new order). Confirm business intent; if not desired, gate the Revise CTA with `!quote.order_id`.", "selector": "[data-testid=\"quote-revise-btn\"]", "priority": "MEDIUM"},
+      {"component": "ContactDetail", "issue": "No visible Delete button on the contact detail page for either linked or unlinked contacts. Backend correctly blocks delete on linked contacts (400/409), but the UI does not expose delete at all — users cannot clean up orphan contacts.", "selector": "n/a", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "All admin pages (post-login)", "issues": ["36 HTTP 404s in the console for /api/uploads/*_main_product_image_*.(png|webp) — product family images referenced in DB but missing from disk. Not blocking any interaction but polluting the console and breaking catalogue thumbnails. Pre-existing (not caused by this iteration)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration18_state_button_audit.py",
+    "/app/test_reports/pytest/iter18.xml",
+    "/app/test_reports/pytest/iter18_regression.xml"
+  ],
+  "action_items": [
+    "MAIN AGENT (P2): Decide whether Revise should be hidden on quotes that already have order_id. If yes, add `!quote.order_id` to the condition on line 184 of QuotationView.jsx.",
+    "MAIN AGENT (P2): Add a Delete button (guarded by backend's 409 check with a friendly toast) to /contacts/{id} — currently there is no way to delete a contact from the UI.",
+    "MAIN AGENT (P3): Missing product-image files under /api/uploads/*_main_product_image_*.(png|webp). Either re-upload the images, add a migration to clear stale `main_image` refs, or serve a placeholder to silence the 36 console 404s."
+  ],
+  "critical_code_review_comments": [
+    "convert-to-order guard implementation is clean: routers/orders.py:58-67 raises 409 with structured detail {message, order_id, order_number}; routers/quotations.py:304-313 delegates to the canonical handler avoiding logic duplication; frontend QuotationView.jsx:135-141 correctly narrows on 409 + detail.order_id and redirects. Idempotency verified end-to-end.",
+    "Backfill: 100% of orders with a quote_id have their quote.order_id back-link populated (verified by test_backfill_sanity_every_order_has_quote_back_link).",
+    "Delete guards: quotation DELETE returns 409 when an order exists (routers/quotations.py:346-352, verified). Contact DELETE also blocks linked contacts (verified via test_delete_contact_blocked_when_linked).",
+    "Shipment stage buttons in OrderView.jsx correctly gate: Dispatch only on stage='invoiced', Mark Delivered only on stage='dispatched', Delete only on stage in ('created','invoiced'), no action buttons on stage='delivered'.",
+    "Fixed 2 pre-existing test-infra bugs in test_iteration15 (asyncio.get_event_loop() raises in Python 3.11 without a running loop) → switched to asyncio.new_event_loop(); both tests now pass."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration18_state_button_audit.py (new — 8 tests covering convert-to-order 409, back-link persistence, backfill sanity, delete guards, status-precondition rejection, shipment dispatch doc guard, public /my-quotes draft filtering)",
+    "/app/backend/tests/test_iteration15_public_url_and_shipment_attach.py (fixed asyncio.get_event_loop() → asyncio.new_event_loop() on lines 214 and 270 — test-infra only)",
+    "/app/backend/.env (temporary during test run; RESTORED to blank RESTRICT_OUTBOUND_TO_PHONE / _EMAIL at teardown + backend restarted)"
+  ],
+  "success_rate": {"backend": "100% (105 passed, 6 skipped, 0 failed across iter9 + iter10 + iter11 + iter12 + iter13 + iter14 + iter15 + iter18)", "frontend": "state-matrix 100% (4/4 quote statuses render exactly the expected buttons); order view 100% (delivered stage correctly hides all advance + shipment-action CTAs); 2 medium UX observations (Revise on converted quote, missing Delete on ContactDetail); 36 stale /uploads/*.png 404s (pre-existing)"},
+  "test_credentials": "admin@hrexporter.com / Admin@123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. Used existing DB rows: order HRE/ORD/2026-27/0001, converted quote HRE/QT/2026-27/0027, approved-not-converted quotes HRE/QT/2026-27/0028 & 0029, sent quote 0026, draft quote 0033.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Convert-to-order guard is production-ready end-to-end. Quote state matrix (draft/sent/approved-unconverted/approved-converted) all render the correct set of buttons. Order view + shipments panel gate their CTAs correctly by stage. Only two open UX items for main agent: (1) Revise still visible on a converted quote — confirm if desired, otherwise hide with `!quote.order_id`; (2) No Delete button on ContactDetail even though the backend supports guarded delete. Also 36 stale product-image 404s in console pollute logs but do not affect flows.",
+  "rca of the issue": "N/A — no critical bugs found. Main agent's convert-to-order fix (routers/orders.py 409 guard + reverse order_id link on quote + backfill script + UI 409-catch + View Order button) is complete and correct. Verified via: 8 new iter18 tests (7 pass + 1 acceptable skip) + full regression (98 passed, 2 pre-existing pytest-loop fails fixed to test-infra fix)."
+}

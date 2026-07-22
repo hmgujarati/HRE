@@ -52,12 +52,30 @@ async def create_order_from_quote(
         raise HTTPException(status_code=404, detail="Quote not found")
     if quote.get("status") not in ("approved", "sent"):
         raise HTTPException(status_code=400, detail="Quote must be approved (or at least sent) before converting to order")
-    # Per business rule (2026-05-11): multiple orders may be created from the
-    # same quote — each gets its own sequential HRE/ORD/... number.
+    # Business rule (2026-07-22, per user): a quote can only be converted once.
+    # If an order already exists for this quote, return 409 and surface the
+    # order number so the UI can redirect instead of creating a duplicate.
+    existing = await db.orders.find_one({"quote_id": qid}, {"_id": 0, "id": 1, "order_number": 1})
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": f"This quote is already converted to order {existing['order_number']}.",
+                "order_id": existing["id"],
+                "order_number": existing["order_number"],
+            },
+        )
     po_number = (data or {}).get("po_number", "") if data else ""
     order = mint_order_from_quote(quote, user["email"], po_number=po_number)
     order["order_number"] = await next_order_number()
     await db.orders.insert_one(order.copy())
+    # Persist the reverse link on the quote so the UI can hide the Convert
+    # button and offer a "View Order" jump instead. No stage change on the
+    # quote itself — it stays 'approved' but is now marked as converted.
+    await db.quotations.update_one(
+        {"id": qid},
+        {"$set": {"order_id": order["id"], "order_number": order["order_number"], "updated_at": now_iso()}},
+    )
     return {k: v for k, v in order.items() if k != "_id"}
 
 
