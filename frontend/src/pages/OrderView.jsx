@@ -355,7 +355,7 @@ function ExpectedCompletionEditor({ order, onSave, busy }) {
     let iso = "";
     if (val.trim()) {
       const parsed = fromDmy(val.trim());
-      if (!parsed) { toast.error("Date must be DD-MM-YYYY (e.g. 25-06-2026)"); return; }
+      if (!parsed) { toast.error("Date must be DD/MM/YYYY (e.g. 25/06/2026)"); return; }
       iso = parsed;
     }
     await onSave(iso);
@@ -380,7 +380,7 @@ function ExpectedCompletionEditor({ order, onSave, busy }) {
                 type="text"
                 value={val}
                 onChange={(e) => setVal(e.target.value)}
-                placeholder="DD-MM-YYYY"
+                placeholder="DD/MM/YYYY"
                 maxLength={10}
                 className="border border-zinc-300 px-3 py-2 text-sm font-mono w-36 focus:outline-none focus:border-[#FBAE17]"
                 data-testid="eta-input"
@@ -665,12 +665,12 @@ function LineItemRow({ order, item, idx, onReload }) {
   };
 
   const save = async () => {
-    // Convert DD-MM-YYYY → YYYY-MM-DD before sending. Empty stays empty.
+    // Convert DD/MM/YYYY → YYYY-MM-DD before sending. Empty stays empty.
     let isoDate = "";
     if (dispatchDate.trim()) {
       const parsed = fromDmy(dispatchDate.trim());
       if (!parsed) {
-        toast.error("Date must be in DD-MM-YYYY format (e.g. 25-06-2026)");
+        toast.error("Date must be in DD/MM/YYYY format (e.g. 25/06/2026)");
         return;
       }
       isoDate = parsed;
@@ -724,7 +724,7 @@ function LineItemRow({ order, item, idx, onReload }) {
             type="text"
             value={dispatchDate}
             onChange={(e) => setDispatchDate(e.target.value)}
-            placeholder="DD-MM-YYYY"
+            placeholder="DD/MM/YYYY"
             maxLength={10}
             className="border border-zinc-300 px-2 py-1 text-xs font-mono w-28"
             data-testid={`line-date-input-${idx}`}
@@ -1033,7 +1033,7 @@ function ShipmentRow({ order, shipment: s, onReload }) {
     let ymd = null;
     if (form.expected_delivery_date.trim()) {
       ymd = fromDmy(form.expected_delivery_date.trim());
-      if (!ymd) { toast.error("ETA must be DD-MM-YYYY"); return; }
+      if (!ymd) { toast.error("ETA must be DD/MM/YYYY"); return; }
     }
     setBusy(true);
     try {
@@ -1185,7 +1185,7 @@ function ShipmentRow({ order, shipment: s, onReload }) {
                 <input value={form.transporter_name} onChange={(e) => setForm({ ...form, transporter_name: e.target.value })} placeholder="Transporter" className="border border-zinc-300 px-2 py-1 text-xs" data-testid={`ship-edit-transporter-${s.id}`} />
                 <input value={form.lr_number} onChange={(e) => setForm({ ...form, lr_number: e.target.value })} placeholder="LR No." className="border border-zinc-300 px-2 py-1 text-xs font-mono" data-testid={`ship-edit-lr-${s.id}`} />
                 <input value={form.invoice_number} onChange={(e) => setForm({ ...form, invoice_number: e.target.value })} placeholder="Invoice No." className="border border-zinc-300 px-2 py-1 text-xs font-mono" data-testid={`ship-edit-invoice-${s.id}`} />
-                <input value={form.expected_delivery_date} onChange={(e) => setForm({ ...form, expected_delivery_date: e.target.value })} placeholder="ETA DD-MM-YYYY" className="border border-zinc-300 px-2 py-1 text-xs font-mono" data-testid={`ship-edit-eta-${s.id}`} />
+                <input value={form.expected_delivery_date} onChange={(e) => setForm({ ...form, expected_delivery_date: e.target.value })} placeholder="ETA DD/MM/YYYY" className="border border-zinc-300 px-2 py-1 text-xs font-mono" data-testid={`ship-edit-eta-${s.id}`} />
               </div>
               <div className="flex gap-2">
                 <button onClick={saveFields} disabled={busy} className="bg-[#FBAE17] hover:bg-[#E59D12] text-black text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 flex items-center gap-1 disabled:opacity-50" data-testid={`ship-edit-save-${s.id}`}>
@@ -1249,7 +1249,7 @@ function ShipmentWizard({ open, onClose, order, eligible, onCreated }) {
     let ymd = null;
     if (eta.trim()) {
       ymd = fromDmy(eta.trim());
-      if (!ymd) { toast.error("ETA must be DD-MM-YYYY"); return; }
+      if (!ymd) { toast.error("ETA must be DD/MM/YYYY"); return; }
     }
     setBusy(true);
     try {
@@ -1305,7 +1305,7 @@ function ShipmentWizard({ open, onClose, order, eligible, onCreated }) {
             <div className="grid grid-cols-2 gap-3">
               <input value={transporter} onChange={(e) => setTransporter(e.target.value)} placeholder="Transporter (e.g. SafexPress)" className="border border-zinc-300 px-3 py-2 text-sm" data-testid="wizard-transporter" />
               <input value={lr} onChange={(e) => setLr(e.target.value)} placeholder="LR Number" className="border border-zinc-300 px-3 py-2 text-sm font-mono" data-testid="wizard-lr" />
-              <input value={eta} onChange={(e) => setEta(e.target.value)} placeholder="Expected delivery DD-MM-YYYY" maxLength={10} className="border border-zinc-300 px-3 py-2 text-sm font-mono" data-testid="wizard-eta" />
+              <input value={eta} onChange={(e) => setEta(e.target.value)} placeholder="Expected delivery DD/MM/YYYY" maxLength={10} className="border border-zinc-300 px-3 py-2 text-sm font-mono" data-testid="wizard-eta" />
             </div>
           </div>
 

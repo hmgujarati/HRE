@@ -92,7 +92,7 @@ export default function ContactDetail() {
                   <td className="px-6 py-3 font-mono font-bold">
                     <Link to={`/quotations/${q.id}`} className="hover:text-[#FBAE17]">{q.quote_number}</Link>
                   </td>
-                  <td className="px-6 py-3 text-xs font-mono text-zinc-500">{new Date(q.created_at).toLocaleDateString()}</td>
+                  <td className="px-6 py-3 text-xs font-mono text-zinc-500">{new Date(q.created_at).toLocaleDateString("en-GB")}</td>
                   <td className="px-6 py-3"><QuoteStatusBadge status={q.status} /></td>
                   <td className="px-6 py-3 text-right font-mono font-bold">₹{(q.grand_total || 0).toLocaleString("en-IN")}</td>
                 </tr>

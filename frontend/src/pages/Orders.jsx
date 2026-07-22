@@ -197,7 +197,7 @@ export default function Orders() {
                         <span className="text-zinc-300">—</span>
                       )}
                     </td>
-                    <td className="px-4 sm:px-6 py-3 text-xs font-mono text-zinc-500">{new Date(o.updated_at).toLocaleDateString()}</td>
+                    <td className="px-4 sm:px-6 py-3 text-xs font-mono text-zinc-500">{new Date(o.updated_at).toLocaleDateString("en-GB")}</td>
                     <td className="px-4 sm:px-6 py-3 text-right font-mono font-bold">₹{(o.grand_total || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                     <td className="px-4 sm:px-6 py-3 text-right relative">
                       <button

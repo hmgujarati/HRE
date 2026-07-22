@@ -130,7 +130,7 @@ export default function MyQuotes() {
                   )}
                   <div className="flex-1 min-w-[140px]">
                     <div className="font-mono font-bold text-sm">{q.quote_number}</div>
-                    <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono mt-0.5">{new Date(q.created_at).toLocaleDateString()}</div>
+                    <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono mt-0.5">{new Date(q.created_at).toLocaleDateString("en-GB")}</div>
                   </div>
                   <div className="flex items-center gap-2">
                     <QuoteStatusBadge status={q.status} />

@@ -148,7 +148,7 @@ export default function Quotations() {
                     <div className="font-medium text-[#1A1A1A]">{qt.contact_name}</div>
                     {qt.contact_company && <div className="text-xs text-zinc-500">{qt.contact_company}</div>}
                   </td>
-                  <td className="px-6 py-3 text-xs font-mono text-zinc-500">{new Date(qt.created_at).toLocaleDateString()}</td>
+                  <td className="px-6 py-3 text-xs font-mono text-zinc-500">{new Date(qt.created_at).toLocaleDateString("en-GB")}</td>
                   <td className="px-6 py-3"><QuoteStatusBadge status={qt.status} /></td>
                   <td className="px-6 py-3"><DeliveryStrip log={qt.dispatch_log} size="xs" /></td>
                   <td className="px-6 py-3 text-right font-mono">{(qt.line_items || []).length}</td>

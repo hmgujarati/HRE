@@ -313,7 +313,7 @@ def _format_date_dmy(iso: str) -> str:
         return ""
     try:
         d = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-        return d.strftime("%d-%m-%y")
+        return d.strftime("%d/%m/%Y")
     except Exception:
         return iso
 

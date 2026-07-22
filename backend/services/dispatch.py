@@ -373,7 +373,7 @@ async def dispatch_finalised_quote(quote: dict) -> dict:
                 if valid_iso:
                     try:
                         d = datetime.fromisoformat(valid_iso)
-                        valid_str = f"{d.strftime('%d-%m-%Y')} · {line_count} item{'s' if line_count != 1 else ''}"
+                        valid_str = f"{d.strftime('%d/%m/%Y')} · {line_count} item{'s' if line_count != 1 else ''}"
                     except Exception:
                         valid_str = f"{line_count} item{'s' if line_count != 1 else ''} · validity 30 days"
                 else:
@@ -517,7 +517,7 @@ async def order_auto_notify(order: dict, stage: str) -> Optional[dict]:
     ord_no = order.get("order_number") or ""
     stage_label = STAGE_TO_LABEL.get(stage, stage)
     stage_template_label = STAGE_TEMPLATE_LABEL.get(stage, stage_label)
-    timestamp = _now_ist().strftime("%d-%m-%Y %H:%M IST")
+    timestamp = _now_ist().strftime("%d/%m/%Y %H:%M IST")
     eta = (order.get("expected_completion_date") or "").strip()
     eta_pretty = ""
     if eta:
@@ -697,7 +697,7 @@ async def notify_production_update(order: dict, note: str) -> Optional[dict]:
             email = email or (live.get("email") or "").strip()
     customer = order.get("contact_name") or order.get("contact_company") or "Customer"
     ord_no = order.get("order_number") or ""
-    timestamp_raw = _now_ist().strftime("%d-%m-%Y %H:%M IST")
+    timestamp_raw = _now_ist().strftime("%d/%m/%Y %H:%M IST")
     eta = (order.get("expected_completion_date") or "").strip()
     eta_pretty = ""
     if eta:
