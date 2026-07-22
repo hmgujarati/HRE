@@ -181,7 +181,7 @@ export default function QuotationView() {
                 <PencilSimple size={14} weight="bold" /> Edit
               </Link>
             )}
-            {quote.status !== "draft" && (
+            {quote.status !== "draft" && !quote.order_id && (
               <button onClick={revise} className="px-4 py-2 border border-[#FBAE17] text-[#1A1A1A] hover:bg-[#FBAE17] text-xs font-bold uppercase tracking-wider flex items-center gap-2" data-testid="quote-revise-btn">
                 <ArrowsClockwise size={14} weight="bold" /> Revise
               </button>
