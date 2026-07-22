@@ -276,3 +276,127 @@ async def log_universal_update(oid: str, result: Dict[str, Any], user_email: str
         "vars": result["vars"],
     }
     await db.orders.update_one({"id": oid}, {"$push": {"notifications": entry}})
+
+
+# ─────────────────── Auto-notify (server-triggered) ───────────────────
+# Resolves preset {{tokens}} against the current order/line/shipment context so
+# state transitions can trigger the same universal-update sends the admin does
+# from the "Notify Customer" side-panel — without a human click.
+
+def _tok(v: Any, default: str = "—") -> str:
+    if v is None:
+        return default
+    s = str(v).strip()
+    return s if s else default
+
+
+def resolve_preset_tokens(
+    preset_id: str,
+    order: Dict[str, Any],
+    line: Optional[Dict[str, Any]] = None,
+    shipment: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """Return the 5 body lines for a preset with all {{tokens}} replaced.
+    Prefers line-specific tokens when `line` is supplied, shipment-specific
+    tokens when `shipment` is supplied."""
+    preset = PRESET_BY_ID.get(preset_id)
+    if not preset:
+        return ["", "", "", "", ""]
+    ctx = {
+        "order_number": _tok(order.get("order_number")),
+        "grand_total": _tok(order.get("grand_total")),
+        "expected_dispatch_date": _tok(
+            (line or {}).get("expected_dispatch_date")
+            or order.get("expected_completion_date")
+        ),
+        "product_code": "",
+        "quantity": "",
+        "transporter": _tok((shipment or {}).get("transporter_name")
+                            or (order.get("dispatch") or {}).get("transporter_name")),
+        "lr_number": _tok((shipment or {}).get("lr_number")
+                          or (order.get("dispatch") or {}).get("lr_number")),
+    }
+    if line:
+        ctx["product_code"] = _tok(line.get("product_code") or line.get("family_name"))
+        ctx["quantity"] = _tok(line.get("quantity"))
+    elif shipment:
+        # Aggregate the product codes of the lines in this shipment
+        idxs = shipment.get("line_indexes") or []
+        items = order.get("line_items") or []
+        codes = [items[i].get("product_code") or items[i].get("family_name") or ""
+                 for i in idxs if 0 <= i < len(items)]
+        ctx["product_code"] = _tok(", ".join([c for c in codes if c]))
+        qtys = [str(items[i].get("quantity") or "") for i in idxs if 0 <= i < len(items)]
+        ctx["quantity"] = _tok(", ".join([q for q in qtys if q]))
+    else:
+        # Fall back to the first line so the message isn't empty
+        items = order.get("line_items") or []
+        if items:
+            ctx["product_code"] = _tok(items[0].get("product_code") or items[0].get("family_name"))
+            ctx["quantity"] = _tok(items[0].get("quantity"))
+
+    resolved: List[str] = []
+    for raw in (preset.get("lines") or ["", "", "", "", ""]):
+        s = raw or ""
+        for k, v in ctx.items():
+            s = s.replace("{{" + k + "}}", v)
+        resolved.append(s)
+    while len(resolved) < 5:
+        resolved.append("")
+    return resolved[:5]
+
+
+AUTO_ATTACH_BY_PRESET = {
+    "pi_issued": "proforma",
+    "shipment_dispatched": "tax_invoice",   # dispatch bundle uploaded to shipment.documents.invoice
+    "shipment_delivered": "none",
+    "item_in_production": "none",
+    "item_ready": "none",
+    "schedule_revision": "none",
+}
+
+
+async def auto_send_preset(
+    oid: str,
+    preset_id: str,
+    order: Dict[str, Any],
+    line: Optional[Dict[str, Any]] = None,
+    shipment: Optional[Dict[str, Any]] = None,
+    also_email: bool = True,
+    triggered_by: str = "system:auto",
+) -> Optional[Dict[str, Any]]:
+    """Fire a universal-update preset automatically. Best-effort — swallows any
+    exception so it never breaks the calling state transition. Persists to the
+    order's `notifications` log with kind='auto_universal_update' and the
+    trigger source so the admin can audit which events fired."""
+    try:
+        body_lines = resolve_preset_tokens(preset_id, order, line=line, shipment=shipment)
+        attach = AUTO_ATTACH_BY_PRESET.get(preset_id, "none")
+        result = await send_universal_update(
+            order=order,
+            body_lines=body_lines,
+            attach_choice=attach,
+            preset_id=preset_id,
+            also_email=also_email,
+        )
+        entry = {
+            "kind": "auto_universal_update",
+            "preset_id": preset_id,
+            "trigger": triggered_by,
+            "by": "system",
+            "at": result.get("at"),
+            "whatsapp": result["whatsapp"],
+            "email": result["email"],
+            "vars": result["vars"],
+        }
+        if line is not None:
+            entry["line_product_code"] = line.get("product_code") or ""
+        if shipment is not None:
+            entry["shipment_id"] = shipment.get("id")
+            entry["shipment_number"] = shipment.get("shipment_number")
+        await db.orders.update_one({"id": oid}, {"$push": {"notifications": entry}})
+        return result
+    except Exception:
+        logger.exception("[auto_send_preset] failed for preset %s on order %s", preset_id, oid)
+        return None
+

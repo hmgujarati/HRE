@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 14 (auto-notify on order/shipment state transitions) fully verified. Wrote 13-case pytest suite covering resolve_preset_tokens unit tests (5 cases: line ctx, shipment ctx, no ctx fallback, missing-token dash, unknown preset), line qty_status → in_production/ready auto-fire (2), idempotence on same-status PATCH (1), line ETA change → schedule_revision (1), shipment dispatch → shipment_dispatched (1), shipment deliver → shipment_delivered (1), manual /notify regression (1), best-effort 200-response contract (1). All 13 pass. Ran full regression iter9+iter10+iter11+iter12+iter13 = 73/73 pass. To avoid hitting real customer numbers I temporarily set RESTRICT_OUTBOUND_TO_PHONE=+918200663263 and RESTRICT_OUTBOUND_TO_EMAIL=qa@hre.test in backend/.env, restarted backend, ran tests, then restored .env to blank and restarted (verified /api/health/integrations returns restrict_outbound_phone='' post-teardown).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"file": "backend/routers/orders.py:203-205", "issue": "Dead-code block: `if data.qty_status is not None and li.get('qty_status') != (items[line_idx].get('qty_status') if False else data.qty_status): pass`. The `if False else …` collapses to `data.qty_status`, comparing `data.qty_status != data.qty_status` → always False. The block is a no-op. The comment on line 204 acknowledges the real gate is the `changes` list a few lines below. Recommend deleting lines 203-205 for readability."},
+      {"file": "backend/routers/orders.py:200", "issue": "`from services.universal_update import auto_send_preset` is imported inside the function on every PATCH. Fine functionally but a top-of-file import would be marginally cleaner and matches the existing pattern for /notify which also does an inline import (also worth hoisting)."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration14_auto_notify.py",
+    "/app/test_reports/pytest/iteration14.xml",
+    "/app/test_reports/pytest/iteration14_regression.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: remove dead-code block at orders.py:203-205 (see minor issue)."
+  ],
+  "critical_code_review_comments": [
+    "auto_send_preset correctly swallows all exceptions with logger.exception — verified best-effort contract via successful 200 return path.",
+    "resolve_preset_tokens context precedence is correct: line ETA overrides order.expected_completion_date; shipment transporter overrides order.dispatch.transporter_name.",
+    "Idempotence is enforced by gating auto-notify on `changes` list content ('status:' or 'ETA:' prefix) rather than on the raw PATCH body — a same-value PATCH produces empty `changes` and is correctly skipped.",
+    "Auto-notify entries carry kind='auto_universal_update' (vs manual kind='universal_update') so admins can filter/distinguish in the timeline — verified in both manual and auto paths.",
+    "Shipment auto-notify persists shipment_id and shipment_number into the notification entry for admin auditability — nice touch."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration14_auto_notify.py (new)",
+    "/app/backend/.env (temp: set RESTRICT_OUTBOUND_TO_PHONE for test run then restored to blank — final state matches pre-test state)"
+  ],
+  "success_rate": {"backend": "100% (13/13 iter14 + 73/73 regression)", "frontend": "not tested (backend-only per request)"},
+  "test_credentials": "admin@hrexporter.com / Admin@123",
+  "seed_data_creation": "None — used existing orders in DB. Test creates its own shipment on a free line item and uploads dummy PDF docs for the dispatch gate.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 14 auto-notify pipeline is verified end-to-end. When testing anything that touches services/universal_update.send_universal_update, always temporarily set RESTRICT_OUTBOUND_TO_PHONE in backend/.env + restart to reroute real WhatsApp sends to Harsh's QA phone (+918200663263), then restore to blank + restart after tests. iter10 test_settings_integrations_exposes_test_mode expects RESTRICT_OUTBOUND_TO_PHONE=+918200663263 so if that env is intentionally blank the assertion is looser (accepts either). Regression suite is stable at 73 pass.",
+  "rca of the issue": "n/a — this was a feature verification (auto-notify wiring), not a bug fix."
+}

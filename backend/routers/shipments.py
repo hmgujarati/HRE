@@ -163,6 +163,14 @@ async def dispatch_shipment(oid: str, sid: str, data: DispatchIn,
         {"$set": {"shipments.$": s, "line_items": items, "updated_at": now_iso()},
          "$push": {"timeline": ev}},
     )
+    # ─── Auto-notify customer that the shipment is on its way ───
+    from services.universal_update import auto_send_preset
+    fresh = await _load_order(oid)
+    fresh_shipment = _find_shipment(fresh, sid)
+    await auto_send_preset(
+        oid, "shipment_dispatched", fresh, shipment=fresh_shipment,
+        triggered_by=f"shipment_dispatched:{sid}",
+    )
     return await _load_order(oid)
 
 
@@ -187,6 +195,14 @@ async def deliver_shipment(oid: str, sid: str, data: DeliverIn,
         {"id": oid, "shipments.id": sid},
         {"$set": {"shipments.$": s, "line_items": items, "updated_at": now_iso()},
          "$push": {"timeline": ev}},
+    )
+    # ─── Auto-notify customer that the shipment is delivered ───
+    from services.universal_update import auto_send_preset
+    fresh = await _load_order(oid)
+    fresh_shipment = _find_shipment(fresh, sid)
+    await auto_send_preset(
+        oid, "shipment_delivered", fresh, shipment=fresh_shipment,
+        triggered_by=f"shipment_delivered:{sid}",
     )
     return await _load_order(oid)
 

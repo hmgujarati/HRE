@@ -192,6 +192,32 @@ async def update_order_line(
         {"id": oid},
         {"$set": {"line_items": items, "updated_at": now_iso()}, "$push": {"timeline": ev}},
     )
+
+    # ─── Auto-notify on meaningful line transitions (best-effort, never raises) ───
+    # We fire the universal-update preset that matches the transition so the
+    # customer gets an immediate WhatsApp + Email without the admin having to
+    # click "Notify Customer". Only fires when the field actually changed.
+    from services.universal_update import auto_send_preset
+    fresh = await db.orders.find_one({"id": oid}, {"_id": 0})
+    fresh_line = (fresh.get("line_items") or [])[line_idx] if fresh else li
+    if data.qty_status is not None and li.get("qty_status") != (items[line_idx].get("qty_status") if False else data.qty_status):
+        # (the outer `if data.qty_status` above already gated on change via `changes` list)
+        pass
+    # Trigger map: only on state changes that are meaningful to the customer.
+    #  pending / in_production / ready are per-line milestones customers care about.
+    #  shipped / delivered are handled by the shipments router.
+    if data.qty_status in ("in_production", "ready") and any(c.startswith("status:") for c in changes):
+        preset = "item_in_production" if data.qty_status == "in_production" else "item_ready"
+        await auto_send_preset(
+            oid, preset, fresh, line=fresh_line,
+            triggered_by=f"line_status:{data.qty_status}",
+        )
+    elif data.expected_dispatch_date is not None and any(c.startswith("ETA:") for c in changes):
+        await auto_send_preset(
+            oid, "schedule_revision", fresh, line=fresh_line,
+            triggered_by="line_eta_change",
+        )
+
     return await db.orders.find_one({"id": oid}, {"_id": 0})
 
 
