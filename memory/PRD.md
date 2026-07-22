@@ -476,3 +476,23 @@ All remaining backlog items shipped in one batch. 67/67 backend tests pass; no r
 
 ### Tests
 - `tests/test_iteration14_auto_notify.py` — 11 pass + 2 skipped (dispatch/deliver flows need a working uploads dir; unit-level coverage is complete). Full regression 73/73.
+
+## Domain & Attachment Fixes — 2026-02 (iterations 15-17)
+User reported: (1) new line/shipment auto-notify was text-only (no PDF), (2) links in WA/Email opened wrong domain because PUBLIC_BASE_URL still pointed at preview + several places had `https://hrexporter.com/my-quotes` hardcoded.
+
+### Fixes landed
+- **`/app/backend/.env`**: `PUBLIC_BASE_URL=https://quote.hrexporter.com` (was preview URL). Rebuilds every uploaded-doc URL, webhook URL, and deep-link on the correct customer-facing subdomain.
+- **Hardcoded URL sweep** — all `https://hrexporter.com/my-quotes` strings replaced with `f"{PUBLIC_BASE_URL}/my-quotes"`:
+  - `server.py` (customer PO ack: plain text + HTML email + WhatsApp text)
+  - `whatsapp_bot.py` (post-quote message)
+  - `ABOUT_HRE_URL` (marketing site) intentionally left as `hrexporter.com/about-hr-exporter` — that's the correct marketing domain.
+- **Auto-notify now attaches PDFs**: `send_universal_update` accepts `attachment_override`; new `_resolve_shipment_attachment` reads `shipment.documents.{tax_invoice|eway_bill|lr_copy}` with a fallback chain (Tax Invoice → E-Way Bill → LR Copy). `auto_send_preset` uses this override for `shipment_dispatched` so the customer WA/Email now carries the Tax Invoice PDF automatically.
+- **Track link in every auto-notify**: `auto_send_preset` unconditionally sets `body_lines[4] = "Track live: {PUBLIC_BASE_URL}/track?order_number=<encoded>"` after padding to 5 vars. Every auto-fired WA message now ends with a tappable public tracker link.
+
+### Test verification
+- iter_15 (public URL sweep + shipment attach) — 9/12 pass, 3 skipped (fixture already fully-shipped, unit coverage complete)
+- iter_16 was a stale re-read (main-agent fix WAS on disk despite the report saying otherwise)
+- iter_17 re-verified fresh — **93 passed / 5 skipped / 0 failed** across iter9-iter17. Zero critical, zero minor issues.
+
+### Known accepted state
+- Legacy shipment documents on order HRE/ORD/2026-27/0001 still have URLs pointing at the OLD preview host. New uploads use the new base. One-off migration script can rewrite if needed — not blocking (customers on that old order will still see working links because the preview host is still reachable).
