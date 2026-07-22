@@ -375,16 +375,17 @@ async def auto_send_preset(
     trigger source so the admin can audit which events fired."""
     try:
         body_lines = resolve_preset_tokens(preset_id, order, line=line, shipment=shipment)
-        # Append a track-status link so the customer can click through to the
-        # live public tracker. Uses PUBLIC_BASE_URL to hit the right domain.
+        # Always inject a track link so the customer can tap through to the
+        # live public tracker. Meta templates accept exactly 5 body vars, so
+        # we unconditionally replace line 5 with the track URL (the presets
+        # keep their headline info in lines 1-4). Uses PUBLIC_BASE_URL to hit
+        # the correct domain (e.g. quote.hrexporter.com in production).
         if PUBLIC_BASE_URL and order.get("order_number"):
             from urllib.parse import quote as _qp
             track_url = f"{PUBLIC_BASE_URL}/track?order_number={_qp(order['order_number'], safe='')}"
-            # Fold the URL onto the last empty line (if any) so we don't blow past 5 vars.
-            for i in range(len(body_lines) - 1, -1, -1):
-                if body_lines[i] == EMPTY_PLACEHOLDER or not body_lines[i].strip():
-                    body_lines[i] = f"Track live: {track_url}"
-                    break
+            while len(body_lines) < 5:
+                body_lines.append("")
+            body_lines[4] = f"Track live: {track_url}"
 
         # Shipment-aware attachment: for shipment_dispatched, attach the
         # shipment's own Tax Invoice (or E-way Bill / LR if present). The
