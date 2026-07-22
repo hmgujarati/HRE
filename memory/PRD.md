@@ -456,3 +456,23 @@ All remaining backlog items shipped in one batch. 67/67 backend tests pass; no r
 - Backend `services/dispatch.py` and `server.py` — all 5 human-facing `strftime` calls now use `%d/%m/%Y`.
 - Verified via PDF download (pdfplumber-parsed) + UI grep: 0 occurrences of dash-format dates remain in scope.
 - Tests: `tests/test_iteration13_date_format_ddmmyyyy.py` (6 pass); regression 67/67.
+
+## Auto-Notify Wiring on Order/Shipment Transitions — 2026-02 (iteration_14)
+- **Problem**: Admin previously had to click the "Notify Customer" side-panel manually after every meaningful state change (line status → in_production/ready, ETA changes, shipment dispatch, shipment deliver). This was tedious and error-prone.
+- **Fix**: Every meaningful state transition now auto-fires the same universal-update preset the admin used to send manually. Zero admin clicks required.
+
+### Wiring
+- `PATCH /api/orders/{oid}/lines/{line_idx}` on `qty_status` → `in_production` fires preset `item_in_production`; → `ready` fires preset `item_ready`.
+- Same endpoint on `expected_dispatch_date` change fires preset `schedule_revision`.
+- `POST /api/orders/{oid}/shipments/{sid}/dispatch` fires preset `shipment_dispatched` (transporter + LR tokens auto-filled from the shipment).
+- `POST /api/orders/{oid}/shipments/{sid}/deliver` fires preset `shipment_delivered`.
+- Auto-notify entries logged with `kind='auto_universal_update'` and `trigger='<source>'` so they're distinguishable from manual sends (`kind='universal_update'`).
+
+### Guarantees
+- **Idempotent**: Same-value PATCH does nothing (gated on `changes` list content, not raw body).
+- **Best-effort**: `auto_send_preset` swallows every exception with `logger.exception` — the state transition always returns 200 even if WhatsApp/SMTP are down.
+- **Token resolution**: New `resolve_preset_tokens(preset_id, order, line=None, shipment=None)` fills in `{{order_number}}`, `{{product_code}}`, `{{quantity}}`, `{{expected_dispatch_date}}`, `{{transporter}}`, `{{lr_number}}` from the appropriate context (line > shipment > order fallback).
+- **Manual `/notify` endpoint unchanged** — admin can still fire ad-hoc sends when they need a custom body.
+
+### Tests
+- `tests/test_iteration14_auto_notify.py` — 11 pass + 2 skipped (dispatch/deliver flows need a working uploads dir; unit-level coverage is complete). Full regression 73/73.

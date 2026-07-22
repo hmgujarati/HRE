@@ -348,7 +348,10 @@ def resolve_preset_tokens(
 
 AUTO_ATTACH_BY_PRESET = {
     "pi_issued": "proforma",
-    "shipment_dispatched": "tax_invoice",   # dispatch bundle uploaded to shipment.documents.invoice
+    # Shipment-level docs live under shipments[].documents.* which the current
+    # attach resolver doesn't reach — fire text-only for now. Body already
+    # includes Transporter/LR from token resolution.
+    "shipment_dispatched": "none",
     "shipment_delivered": "none",
     "item_in_production": "none",
     "item_ready": "none",

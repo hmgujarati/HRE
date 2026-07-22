@@ -13,6 +13,7 @@ from services.shipments import (
     SHIP_DOC_KEYS, SHIP_DOC_REQUIRED_FOR_DISPATCH, SHIPMENT_STAGES,
     apply_shipment_stage_to_lines, make_shipment_draft, save_shipment_doc,
 )
+from services.universal_update import auto_send_preset
 
 router = APIRouter()
 
@@ -164,7 +165,6 @@ async def dispatch_shipment(oid: str, sid: str, data: DispatchIn,
          "$push": {"timeline": ev}},
     )
     # ─── Auto-notify customer that the shipment is on its way ───
-    from services.universal_update import auto_send_preset
     fresh = await _load_order(oid)
     fresh_shipment = _find_shipment(fresh, sid)
     await auto_send_preset(
@@ -197,7 +197,6 @@ async def deliver_shipment(oid: str, sid: str, data: DeliverIn,
          "$push": {"timeline": ev}},
     )
     # ─── Auto-notify customer that the shipment is delivered ───
-    from services.universal_update import auto_send_preset
     fresh = await _load_order(oid)
     fresh_shipment = _find_shipment(fresh, sid)
     await auto_send_preset(
