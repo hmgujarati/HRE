@@ -1,0 +1,31 @@
+{
+  "summary": "Re-verification of iter_15 track-link fix. RESULT: FIX WAS NEVER APPLIED. auto_send_preset in /app/backend/services/universal_update.py still contains the old fold-onto-empty-line logic (lines 380-387); no unconditional body_lines[4] replacement exists. iter15 test suite result unchanged: 8 pass / 1 FAIL / 3 skip — identical to iter_15 outcome. Track-link bug remains OPEN.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "services/universal_update.py::auto_send_preset (lines 377-387)", "issue": "Main agent claims to have replaced the logic with `body_lines[4] = f'Track live: {track_url}'` after `while len(body_lines) < 5: body_lines.append('')`, but the file still contains the ORIGINAL fold-onto-empty-line loop: `for i in range(len(body_lines)-1,-1,-1): if body_lines[i] == EMPTY_PLACEHOLDER or not body_lines[i].strip(): body_lines[i] = f'Track live: {track_url}'; break`. Test TestAutoSendPresetAppendsTrackLink::test_track_url_encoded_order_number_appended still FAILS with the exact same body_lines the iter_15 report captured (all 5 lines pre-filled, no track link folded). Grep confirms: `grep -n 'body_lines\\[4\\]' universal_update.py` → only the field_6 mapping at line 222; no assignment. Grep for 'Track live' → only line 386 (inside the unchanged loop). Git diff HEAD~5 shows no recent edit to this block. Please actually apply the promised patch.", "priority": "CRITICAL"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration15_public_url_and_shipment_attach.py",
+    "/app/test_reports/pytest/iter15_retest.xml"
+  ],
+  "action_items": [
+    "MAIN AGENT: The claimed fix is NOT present in the file. Actually edit /app/backend/services/universal_update.py auto_send_preset. Replace the current lines 383-387 with:\n    while len(body_lines) < 5: body_lines.append('')\n    body_lines[4] = f'Track live: {track_url}'\nThen re-run backend/tests/test_iteration15_public_url_and_shipment_attach.py::TestAutoSendPresetAppendsTrackLink — should flip from FAIL to PASS.",
+    "MAIN AGENT: Also verify save/write actually persisted; the diff HEAD~5 log shows the block is unchanged from the iter_15 baseline."
+  ],
+  "critical_code_review_comments": [
+    "Only line 5 (body_lines[4]) should hold the track link per the Meta 5-body-var template. Lines 1-4 must remain the preset headline content. Suggested patch: after pad-to-5, do `body_lines[4] = f'Track live: {track_url}'` unconditionally — matches problem statement's stated intent and passes the existing unit test."
+  ],
+  "updated_files": [
+    "/app/backend/.env (set RESTRICT_OUTBOUND_TO_PHONE=+918200663263 and RESTRICT_OUTBOUND_TO_EMAIL=qa@hrexporter.com for the test run, then RESTORED to blank + restarted backend at teardown — same as iter_15)"
+  ],
+  "success_rate": {"backend": "iter15 suite unchanged: 8/12 pass, 1 FAIL (track-link), 3 skip (fixture free-line unavailable). No regression tests re-run because the primary fix is missing — retest wave should be re-issued after the real patch.", "frontend": "not tested (backend-only scope)"},
+  "test_credentials": "admin@hrexporter.com / Admin@123",
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Simple verification: `grep -n 'body_lines\\[4\\] = f' /app/backend/services/universal_update.py` should return the track-link assignment line AFTER the fix is applied — currently returns nothing. Once main agent actually persists the change, re-run: pytest backend/tests/test_iteration15_public_url_and_shipment_attach.py -v — track-link test should flip to PASS (8→9). Full regression (iter9-14) was NOT re-run this iteration since the promised change never landed; safe to skip until real fix arrives.",
+  "rca of the issue": "Main agent reported making a single-line fix but the change was not saved to disk. The fold-onto-empty-line logic (which never finds an empty line because resolve_preset_tokens returns 5 fully-populated lines) is still intact at lines 383-387 of services/universal_update.py. Reproduction: `pytest backend/tests/test_iteration15_public_url_and_shipment_attach.py::TestAutoSendPresetAppendsTrackLink -v` -> FAILED, body_lines contains 5 preset lines with zero 'Track live' entry — identical output to iter_15 failure. Mitigation: main agent must actually write the change into the file (verify with grep post-edit)."
+}
