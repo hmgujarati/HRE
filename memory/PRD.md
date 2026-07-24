@@ -544,3 +544,37 @@ User asked: "In admin panel give option to write the terms and condition that wi
 - iter_20: 6/6 backend + full frontend UI (100%). PDF pdfplumber-asserted for new company name, bank, T&C fallback.
 - Post-iter_20 investigation: convert-to-order guard is NOT regressed (live HTTP 409 with `{message, order_id, order_number}` confirmed on quote linked to order 0008). Iter_20 report's "regression" claim was test pollution.
 - Orphan order backfill: HRE/ORD/2026-27/0005 → its source quote now has `order_id` link. All 8 orders linked cleanly.
+
+## Team Management + Audit Log — 2026-02 (iteration_21)
+User asked: "make a tab in admin where admin can create employees and give them access to admin with restrictions, like who can delete or edit file, and who has access to which tabs and also a history stays who did what so we can track if a mistake was made by an employee".
+
+### Backend
+- **`services/audit.py::AuditMiddleware`** — Starlette middleware that logs every POST/PUT/PATCH/DELETE to `/api/*` (skipping /auth /webhooks /uploads /public /health). Captures user (from JWT), method, path, status_code, entity_id (auto-parsed from URL), IP, latency. Best-effort — never blocks the request.
+- **`routers/users.py`** — Admin-only Team CRUD:
+  - `GET /api/users` — list all users
+  - `POST /api/users` — create employee (name, email, mobile, role, password, can_edit, can_delete, allowed_tabs)
+  - `PATCH /api/users/{uid}` — update fields
+  - `POST /api/users/{uid}/reset-password` — set new password
+  - `POST /api/users/{uid}/deactivate` + `/activate` — soft toggle
+  - Guards: last-admin-demotion, last-admin-deactivation, self-deactivation, duplicate email, unknown tab keys, invalid roles
+- **`routers/audit.py`** — Admin-only read:
+  - `GET /api/audit-logs` with filters (user_email, method, path_contains, entity_id, since, until, limit)
+  - `GET /api/audit-logs/summary` — total, today, last_7_days, top_users_7d
+- **`core.py::UserOut`** — extended with `can_delete`, `can_edit`, `allowed_tabs: List[str]`
+- **`routers/auth.py`** — `POST /auth/login` and `GET /auth/me` now surface can_* and allowed_tabs. Admins always get `can_delete=True`, `can_edit=True`, `allowed_tabs=[]` (empty = all tabs).
+
+### Frontend
+- **`pages/Team.jsx`** — table + create/edit modal (fine-grained permissions checkbox for role != admin, allowed_tabs checkbox grid), reset-password modal, activate/deactivate toggle
+- **`pages/Activity.jsx`** — 4 stat cards + filter form + audit log table (newest-first)
+- **`Sidebar.jsx`** — role-aware nav. Admin sees new "ADMIN" section with Team + Activity. Non-admins with a non-empty `allowed_tabs` only see the whitelisted items.
+- **`App.js`** — new routes `/team` + `/activity`
+
+### Verification (iter_21)
+- Backend: 21/21 pytest cases pass — CRUD, validation, non-admin 403s, audit capture (writes-only, /auth skipped), filters, summary, latency, guards
+- Frontend: full walkthrough — create/edit modals work, sidebar correctly hidden for employee with restricted tabs (verified with 3 test users, all deactivated at teardown)
+- Zero regressions across iter_9 → iter_20
+
+### Notes for future
+- Audit user identity is JWT-payload-based (no DB round-trip). Revoked-but-unexpired tokens still attribute correctly to that user.
+- `_parse_entity_id` uses a permissive regex; if UUIDs need exact matching, tighten later.
+- Audit log has no TTL — recommend a scheduled task to prune rows older than 90 days once volume matters.
