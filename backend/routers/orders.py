@@ -369,11 +369,15 @@ async def upload_po(oid: str, file: UploadFile = File(...), po_number: str = "",
     return await db.orders.find_one({"id": oid}, {"_id": 0})
 
 
-def _render_pdf_for_order(doc_src: dict, out_path, title: str):
+async def _render_pdf_for_order(doc_src: dict, out_path, title: str):
     from quote_pdf import render_quote_pdf
+    from services.integrations import get_integrations
     logo = UPLOAD_DIR.parent.parent / "frontend" / "public" / "hre-logo-light-bg.png"
     logo_url = logo.as_uri() if logo.exists() else None
-    render_quote_pdf(doc_src, out_path, logo_url, title)
+    settings = await get_integrations()
+    seller = settings.get("seller") or {}
+    default_terms = (settings.get("terms") or {}).get("default_terms") or ""
+    render_quote_pdf(doc_src, out_path, logo_url, title, None, seller, default_terms)
 
 
 @router.post("/orders/{oid}/proforma/generate")
@@ -397,7 +401,7 @@ async def generate_proforma(oid: str, user: dict = Depends(require_role("admin",
     }
     import asyncio
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _render_pdf_for_order, doc_src, out, "PROFORMA INVOICE")
+    await _render_pdf_for_order(doc_src, out, "PROFORMA INVOICE")
     public_url = (f"{PUBLIC_BASE_URL}/api/uploads/orders/{oid}/{out.name}"
                   if PUBLIC_BASE_URL else f"/api/uploads/orders/{oid}/{out.name}")
     proforma = {
@@ -473,7 +477,7 @@ async def generate_invoice(oid: str, user: dict = Depends(require_role("admin", 
     }
     import asyncio
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _render_pdf_for_order, doc_src, out, "TAX INVOICE")
+    await _render_pdf_for_order(doc_src, out, "TAX INVOICE")
     public_url = (f"{PUBLIC_BASE_URL}/api/uploads/orders/{oid}/{out.name}"
                   if PUBLIC_BASE_URL else f"/api/uploads/orders/{oid}/{out.name}")
     invoice = {

@@ -3,11 +3,12 @@ import PageHeader from "@/components/PageHeader";
 import { useAuth } from "@/contexts/AuthContext";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { WhatsappLogo, Envelope, User, Palette, Storefront, CheckCircle, Warning, PaperPlaneRight, FloppyDisk } from "@phosphor-icons/react";
+import { WhatsappLogo, Envelope, User, Palette, Storefront, CheckCircle, Warning, PaperPlaneRight, FloppyDisk, Buildings } from "@phosphor-icons/react";
 
 const TABS = [
   { id: "whatsapp", label: "WhatsApp", icon: WhatsappLogo },
   { id: "smtp", label: "Email (SMTP)", icon: Envelope },
+  { id: "company", label: "Company / PDF", icon: Buildings },
   { id: "catalog", label: "Catalogue", icon: Storefront },
   { id: "account", label: "Account", icon: User },
   { id: "branding", label: "Branding", icon: Palette },
@@ -45,6 +46,7 @@ export default function Settings() {
       <div className="p-4 sm:p-8">
         {tab === "whatsapp" && <WhatsAppTab canEdit={isAdmin} />}
         {tab === "smtp" && <SmtpTab canEdit={isAdmin} />}
+        {tab === "company" && <CompanyTab canEdit={isAdmin} />}
         {tab === "catalog" && <CatalogTab canEdit={isAdmin} />}
         {tab === "account" && <AccountTab user={user} />}
         {tab === "branding" && <BrandingTab />}
@@ -519,6 +521,108 @@ function SmtpTab({ canEdit }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------- Company / PDF tab ----------------
+function CompanyTab({ canEdit }) {
+  const [seller, setSeller] = useState(null);
+  const [terms, setTerms] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    try {
+      const { data } = await api.get("/settings/integrations");
+      setSeller(data.seller || {});
+      setTerms((data.terms || {}).default_terms || "");
+    } catch (err) {
+      toast.error(formatApiError(err?.response?.data?.detail));
+    }
+  };
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.put("/settings/integrations", { seller, terms: { default_terms: terms } });
+      toast.success("Company details saved — will apply to every new PDF");
+      await load();
+    } catch (err) {
+      toast.error(formatApiError(err?.response?.data?.detail));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!seller) return <div className="text-zinc-400 text-sm">Loading…</div>;
+  const set = (k) => (v) => setSeller({ ...seller, [k]: v });
+
+  return (
+    <div className="space-y-6 max-w-4xl">
+      <div className="bg-blue-50 border-l-4 border-blue-500 text-blue-900 text-xs p-3">
+        These fields appear on every generated Quotation, Proforma Invoice and Tax Invoice PDF, and in the on-screen quote view.
+      </div>
+
+      <section className="border border-zinc-200 bg-white p-6">
+        <h3 className="text-xs uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-4">Company Details</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Company Name" value={seller.name} onChange={set("name")} testId="company-name" disabled={!canEdit} />
+          <Field label="GSTIN" value={seller.gstin} onChange={set("gstin")} testId="company-gstin" mono disabled={!canEdit} />
+          <Field label="PAN" value={seller.pan} onChange={set("pan")} testId="company-pan" mono disabled={!canEdit} />
+          <Field label="State" value={seller.state} onChange={set("state")} testId="company-state" hint="Used for CGST/SGST vs IGST detection" disabled={!canEdit} />
+          <Field label="State Code" value={seller.state_code} onChange={set("state_code")} testId="company-state-code" mono disabled={!canEdit} />
+          <Field label="Email" value={seller.email} onChange={set("email")} testId="company-email" type="email" disabled={!canEdit} />
+          <Field label="Phone Number(s)" value={seller.phones} onChange={set("phones")} testId="company-phones" span disabled={!canEdit} hint="Comma-separated, e.g. +91 9033135768, +91 8980004416" />
+          <div className="sm:col-span-2">
+            <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-700 mb-1 block">Full Address</label>
+            <textarea
+              value={seller.address || ""}
+              onChange={(e) => set("address")(e.target.value)}
+              rows={3}
+              disabled={!canEdit}
+              data-testid="company-address"
+              className="w-full border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:border-[#FBAE17] disabled:bg-zinc-50"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="border border-zinc-200 bg-white p-6">
+        <h3 className="text-xs uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-4">Bank Details</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Bank Name" value={seller.bank_name} onChange={set("bank_name")} testId="company-bank-name" disabled={!canEdit} />
+          <Field label="Account Number" value={seller.bank_account} onChange={set("bank_account")} testId="company-bank-account" mono disabled={!canEdit} />
+          <Field label="IFSC Code" value={seller.bank_ifsc} onChange={set("bank_ifsc")} testId="company-bank-ifsc" mono disabled={!canEdit} />
+          <Field label="Branch" value={seller.bank_branch} onChange={set("bank_branch")} testId="company-bank-branch" disabled={!canEdit} />
+        </div>
+      </section>
+
+      <section className="border border-zinc-200 bg-white p-6">
+        <h3 className="text-xs uppercase tracking-[0.22em] font-bold text-[#FBAE17] mb-2">Default Terms & Conditions</h3>
+        <p className="text-xs text-zinc-500 mb-3">Boilerplate T&C printed on every Quotation PDF where no per-quote terms were entered. Use one clause per line.</p>
+        <textarea
+          value={terms}
+          onChange={(e) => setTerms(e.target.value)}
+          rows={8}
+          disabled={!canEdit}
+          data-testid="company-terms"
+          className="w-full border border-zinc-300 px-3 py-2 text-sm font-mono focus:outline-none focus:border-[#FBAE17] disabled:bg-zinc-50"
+        />
+      </section>
+
+      {canEdit && (
+        <div className="flex justify-end">
+          <button
+            onClick={save}
+            disabled={busy}
+            data-testid="company-save-btn"
+            className="bg-[#1A1A1A] hover:bg-[#2a2a2a] text-[#FBAE17] font-bold uppercase tracking-wider text-xs px-6 py-3 flex items-center gap-2 disabled:opacity-40"
+          >
+            <FloppyDisk size={14} weight="fill" /> {busy ? "Saving…" : "Save Company Details"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

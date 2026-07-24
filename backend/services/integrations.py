@@ -101,6 +101,23 @@ DEFAULT_INTEGRATIONS = {
         "template_text": "hr_product_dispatch",
         "template_language": "en_US",
     },
+    "seller": {
+        "name": "H R Exporter",
+        "address": "BLOCK NO 201, BHATGAM ROAD, BHATGAM, OLPAD, SURAT, 394540",
+        "phones": "+91 9033135768, +91 8980004416 (Guj. Ind)",
+        "email": "info@hrexporter.com",
+        "gstin": "24ENVPS1624A1ZZ",
+        "pan": "ENVPS1624A",
+        "state": "GUJARAT",
+        "state_code": "24",
+        "bank_name": "ICICI BANK",
+        "bank_account": "183705501244",
+        "bank_ifsc": "ICIC0001837",
+        "bank_branch": "L P SAVANI ROAD BRANCH, SURAT.",
+    },
+    "terms": {
+        "default_terms": "1. Prices are ex-works Surat, exclusive of freight & insurance.\n2. Payment: 50% advance, balance against Proforma Invoice.\n3. Delivery: 4-6 weeks from receipt of advance.\n4. Any transit damage must be reported within 48 hours.\n5. Subject to Surat jurisdiction.",
+    },
 }
 
 
@@ -115,6 +132,8 @@ async def get_integrations() -> dict:
     out["smtp"] = {**DEFAULT_INTEGRATIONS["smtp"], **(doc.get("smtp") or {})}
     out["catalog"] = {**DEFAULT_INTEGRATIONS["catalog"], **(doc.get("catalog") or {})}
     out["universal_update"] = {**DEFAULT_INTEGRATIONS["universal_update"], **(doc.get("universal_update") or {})}
+    out["seller"] = {**DEFAULT_INTEGRATIONS["seller"], **(doc.get("seller") or {})}
+    out["terms"] = {**DEFAULT_INTEGRATIONS["terms"], **(doc.get("terms") or {})}
     if not out["whatsapp"].get("webhook_secret"):
         out["whatsapp"]["webhook_secret"] = secrets.token_urlsafe(24)
         await db.settings.update_one(

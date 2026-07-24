@@ -15,7 +15,7 @@ export default function QuotationBuilder() {
   const [contact, setContact] = useState(null);
   const [items, setItems] = useState([]);
   const [notes, setNotes] = useState("");
-  const [terms, setTerms] = useState("Prices are exclusive of freight unless specified.\nValidity: 30 days.\nPayment: 50% advance, 50% before dispatch.");
+  const [terms, setTerms] = useState("");
   const [validUntil, setValidUntil] = useState(() => {
     const d = new Date(); d.setDate(d.getDate() + 30);
     return d.toISOString().slice(0, 10);
@@ -52,6 +52,12 @@ export default function QuotationBuilder() {
         }
         const p = await api.get("/quotations/next-number");
         setPreview(p.data.preview);
+        // Prefill T&C from Settings (Company / PDF tab) so admin-configured
+        // boilerplate carries into every new quote unless overridden.
+        try {
+          const { data: s } = await api.get("/settings/integrations");
+          setTerms((s.terms?.default_terms) || "");
+        } catch {}
       }
       setLoaded(true);
     })();

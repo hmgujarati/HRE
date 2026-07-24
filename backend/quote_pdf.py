@@ -340,43 +340,73 @@ def _inr_fmt(n: float) -> str:
     return f"{sign}{grouped}.{frac}"
 
 
-def render_quote_pdf(quote: Dict[str, Any], output_path: Path, logo_url: str | None = None, doc_title: str = "QUOTATION", meta_labels: Optional[Dict[str, str]] = None) -> Path:
+def render_quote_pdf(quote: Dict[str, Any], output_path: Path, logo_url: str | None = None, doc_title: str = "QUOTATION", meta_labels: Optional[Dict[str, str]] = None, seller_override: Optional[Dict[str, Any]] = None, default_terms: Optional[str] = None) -> Path:
     """Render the supplied quote/PI/invoice dict to a PDF at output_path.
     `doc_title` is shown in the header (e.g. "QUOTATION", "PROFORMA INVOICE").
-    `meta_labels` overrides the Quot.No/Quot.Date labels (e.g. PI No/PI Date)."""
+    `meta_labels` overrides the Quot.No/Quot.Date labels (e.g. PI No/PI Date).
+    `seller_override` supplies live company details from the Settings doc — falls
+    back to the hardcoded SELLER constant if omitted (or missing fields).
+    `default_terms` is applied when the quote itself has no terms — sourced
+    from the Settings 'Company / PDF' tab so admin can edit once, apply
+    everywhere.
+    """
     env = Environment(loader=BaseLoader(), autoescape=select_autoescape(["html", "xml"]))
     env.globals["inr_fmt"] = _inr_fmt
     tpl = env.from_string(_TEMPLATE)
 
-    buyer_state = (quote.get("place_of_supply") or "").strip().upper()
-    # Per business rule: any state OTHER than the seller's (Gujarat) — including
-    # empty/unknown — is treated as inter-state → IGST. Intra-Gujarat → CGST+SGST.
-    # Tolerant match: accepts "Gujarat", "GUJARAT", "Gujarati" (common typo),
-    # "Gujarat (GJ)", "GJ" so a user typo on the buyer state doesn't silently
-    # flip the invoice to IGST.
-    seller_state = SELLER["state"].upper()
-    is_intrastate = buyer_state.startswith(seller_state) or buyer_state == "GJ"
+    # Merge live seller settings on top of the hardcoded defaults so a partially
+    # filled settings doc still renders (never blanks out a field the DB doesn't
+    # override). Bank sub-fields are folded into a `bank` dict for the template.
+    seller_effective = {**SELLER}
+    if seller_override:
+        for k in ("name", "address", "phones", "email", "gstin", "pan", "state", "state_code",
+                  "bank_name", "bank_account", "bank_ifsc", "bank_branch"):
+            v = seller_override.get(k)
+            if v:
+                seller_effective[k] = v
+        bank = dict(seller_effective.get("bank") or {})
+        for src_key, dst_key in (
+            ("bank_name", "name"), ("bank_account", "account"),
+            ("bank_ifsc", "ifsc"), ("bank_branch", "branch"),
+        ):
+            v = seller_override.get(src_key)
+            if v:
+                bank[dst_key] = v
+        seller_effective["bank"] = bank
+
+    # Apply the default terms fallback so an unfilled quote still shows the
+    # boilerplate T&C from Settings.
+    quote_for_render = dict(quote)
+    if not (quote_for_render.get("terms") or "").strip() and default_terms:
+        quote_for_render["terms"] = default_terms
+
+    buyer_state = (quote_for_render.get("place_of_supply") or "").strip().upper()
+    # Per business rule: any state OTHER than the seller's — including
+    # empty/unknown — is treated as inter-state → IGST. Intra-state → CGST+SGST.
+    # Tolerant match on state prefix so a user typo like "Gujarati" or "GJ"
+    # doesn't silently flip the invoice to IGST.
+    seller_state = (seller_effective.get("state") or "").upper()
+    is_intrastate = seller_state and (buyer_state.startswith(seller_state) or (seller_state == "GUJARAT" and buyer_state == "GJ"))
     is_interstate = not is_intrastate
-    line_items = quote.get("line_items") or []
+    line_items = quote_for_render.get("line_items") or []
     total_qty = sum(float(it.get("quantity") or 0) for it in line_items)
     gst_rate = float((line_items[0].get("gst_percentage") if line_items else 18) or 18)
 
-    short_match = quote.get("quote_number", "")
-    # Extract trailing digits for "Quot. No" field
+    short_match = quote_for_render.get("quote_number", "")
     import re as _re
     m = _re.search(r"(\d+)(?:-R\d+)?$", short_match)
     short_quote_no = m.group(1) if m else short_match
 
     html_str = tpl.render(
-        q=quote,
-        seller=SELLER,
+        q=quote_for_render,
+        seller=seller_effective,
         buyer_state_code=STATE_CODE_MAP.get(buyer_state, ""),
         is_interstate=is_interstate,
         gst_rate=gst_rate,
         total_qty=total_qty,
-        words=number_to_words_inr(quote.get("grand_total") or 0),
-        created_date=_format_date_dmy(quote.get("created_at") or ""),
-        valid_until_date=_format_date_dmy(quote.get("valid_until") or ""),
+        words=number_to_words_inr(quote_for_render.get("grand_total") or 0),
+        created_date=_format_date_dmy(quote_for_render.get("created_at") or ""),
+        valid_until_date=_format_date_dmy(quote_for_render.get("valid_until") or ""),
         short_quote_no=short_quote_no,
         logo_url=logo_url,
         doc_title=doc_title,

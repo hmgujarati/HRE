@@ -291,6 +291,7 @@ async def generate_quote_pdf(quote: dict, unique: bool = False) -> Path:
     `unique=True` adds a timestamp suffix so WhatsApp/Meta media cache
     (keyed on URL) always fetches a fresh copy."""
     from quote_pdf import render_quote_pdf
+    from services.integrations import get_integrations
     out_dir = UPLOAD_DIR / "quotes"
     out_dir.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", quote.get("quote_number") or quote["id"])
@@ -301,8 +302,16 @@ async def generate_quote_pdf(quote: dict, unique: bool = False) -> Path:
         out = out_dir / f"{safe_name}.pdf"
     logo = UPLOAD_DIR.parent.parent / "frontend" / "public" / "hre-logo-light-bg.png"
     logo_url = logo.as_uri() if logo.exists() else None
+    # Fetch live seller + default T&C from Settings so admin edits reflect
+    # in every generated PDF without a code deploy.
+    settings = await get_integrations()
+    seller = settings.get("seller") or {}
+    default_terms = (settings.get("terms") or {}).get("default_terms") or ""
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, render_quote_pdf, quote, out, logo_url)
+    await loop.run_in_executor(
+        None,
+        lambda: render_quote_pdf(quote, out, logo_url, "QUOTATION", None, seller, default_terms),
+    )
     return out
 
 

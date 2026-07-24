@@ -8,8 +8,9 @@ import QuoteStatusBadge from "@/components/QuoteStatusBadge";
 import { DeliveryPill, latestByChannel } from "@/components/DeliveryPill";
 import { numberToWordsINR } from "@/lib/numberToWords";
 
-// Seller details (H R Exporter) — to become editable in Settings later
-const SELLER = {
+// Fallback seller details (H R Exporter) — overridden at runtime by
+// /api/settings/integrations "seller" so admin can edit these live.
+const DEFAULT_SELLER = {
   name: "H R Exporter",
   address: "BLOCK NO 201, BHATGAM ROAD, BHATGAM, OLPAD, SURAT, 394540",
   phones: "+91 9033135768, +91 8980004416 (Guj. Ind)",
@@ -25,6 +26,24 @@ const SELLER = {
     branch: "L P SAVANI ROAD BRANCH, SURAT.",
   },
 };
+
+function mergeSeller(fromApi) {
+  if (!fromApi) return DEFAULT_SELLER;
+  return {
+    ...DEFAULT_SELLER,
+    ...Object.fromEntries(
+      ["name", "address", "phones", "email", "gstin", "pan", "state", "state_code"]
+        .filter((k) => fromApi[k])
+        .map((k) => [k, fromApi[k]]),
+    ),
+    bank: {
+      name: fromApi.bank_name || DEFAULT_SELLER.bank.name,
+      account: fromApi.bank_account || DEFAULT_SELLER.bank.account,
+      ifsc: fromApi.bank_ifsc || DEFAULT_SELLER.bank.ifsc,
+      branch: fromApi.bank_branch || DEFAULT_SELLER.bank.branch,
+    },
+  };
+}
 
 const stateCodeMap = {
   "ANDHRA PRADESH": "37", "ARUNACHAL PRADESH": "12", "ASSAM": "18", "BIHAR": "10",
@@ -54,10 +73,15 @@ export default function QuotationView() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [quote, setQuote] = useState(null);
+  const [SELLER, setSELLER] = useState(DEFAULT_SELLER);
 
   const load = async () => {
-    const r = await api.get(`/quotations/${id}`);
-    setQuote(r.data);
+    const [q, s] = await Promise.all([
+      api.get(`/quotations/${id}`),
+      api.get("/settings/integrations").catch(() => ({ data: {} })),
+    ]);
+    setQuote(q.data);
+    setSELLER(mergeSeller(s.data?.seller));
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [id]);
 

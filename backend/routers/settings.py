@@ -67,11 +67,32 @@ class UniversalUpdateSettingsIn(BaseModel):
     template_language: Optional[str] = None
 
 
+class SellerSettingsIn(BaseModel):
+    name: str = ""
+    address: str = ""
+    phones: str = ""
+    email: str = ""
+    gstin: str = ""
+    pan: str = ""
+    state: str = ""
+    state_code: str = ""
+    bank_name: str = ""
+    bank_account: str = ""
+    bank_ifsc: str = ""
+    bank_branch: str = ""
+
+
+class TermsSettingsIn(BaseModel):
+    default_terms: str = ""
+
+
 class IntegrationsIn(BaseModel):
     whatsapp: Optional[WhatsAppSettingsIn] = None
     smtp: Optional[SmtpSettingsIn] = None
     catalog: Optional[CatalogSettingsIn] = None
     universal_update: Optional[UniversalUpdateSettingsIn] = None
+    seller: Optional[SellerSettingsIn] = None
+    terms: Optional[TermsSettingsIn] = None
 
 
 class WhatsAppTestIn(BaseModel):
@@ -149,6 +170,10 @@ async def update_integrations(data: IntegrationsIn, request: Request, _: dict = 
     if data.universal_update is not None:
         incoming = {k: v for k, v in data.universal_update.model_dump().items() if v is not None}
         cur["universal_update"] = {**cur.get("universal_update", {}), **incoming}
+    if data.seller is not None:
+        cur["seller"] = {**cur.get("seller", {}), **data.seller.model_dump()}
+    if data.terms is not None:
+        cur["terms"] = {**cur.get("terms", {}), **data.terms.model_dump()}
     cur["id"] = SETTINGS_DOC_ID
     cur["updated_at"] = now_iso()
     await db.settings.update_one({"id": SETTINGS_DOC_ID}, {"$set": cur}, upsert=True)
