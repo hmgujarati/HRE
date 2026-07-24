@@ -524,3 +524,23 @@ User asked for a comprehensive audit: "if a quotation is already clicked for con
 - `tests/test_iteration18_state_button_audit.py` — 8 tests (7 pass + 1 acceptable skip): convert-to-order 409, back-link persistence, backfill sanity, delete guards, status-precondition rejection, shipment dispatch doc guard, public /my-quotes draft filtering
 - iter_19 re-verification of the 2 medium UX items above → tested via testing_agent_v3_fork
 - Full regression 105+ pass / 0 fail across iter_9 → iter_18
+
+## Editable Company / PDF Settings — 2026-02 (iteration_20)
+User asked: "In admin panel give option to write the terms and condition that will be written on the Quote and other system generated pdf, and also give option to change address of our company and phone and email and gst and pan and bank details."
+
+### What landed
+- **New "Company / PDF" tab in Settings** (`pages/Settings.jsx::CompanyTab`) — 3 sections:
+  - Company Details: name, address, phones, email, GSTIN, PAN, state, state code
+  - Bank Details: bank name, account, IFSC, branch
+  - Default Terms & Conditions (multi-line)
+- **Backend**: `settings.seller` + `settings.terms.default_terms` persisted in the settings doc via new Pydantic models (`SellerSettingsIn`, `TermsSettingsIn`). GET returns them; PUT accepts partial updates.
+- **PDF rendering**: `quote_pdf.render_quote_pdf` extended with `seller_override` + `default_terms` params. Effective seller = hardcoded defaults ⊕ live settings override (all 12 fields including 4 bank_* keys — testing agent caught a bug where bank_* weren't propagating; fixed). Effective terms = per-quote terms > default_terms > empty.
+- **All PDF callsites wired**: `services/dispatch.py::generate_quote_pdf` (Quotation), `routers/orders.py::_render_pdf_for_order` (Proforma + Tax Invoice) both fetch settings and pass seller/default_terms.
+- **On-screen QuotationView** now fetches seller from `/api/settings/integrations` at mount and uses dynamic values (falls back to hardcoded defaults if API missing).
+- **QuotationBuilder** prefills the Terms textarea from `settings.terms.default_terms` on new quotes.
+- **GST logic** stays correct after seller.state becomes editable (verified: seller=GUJ+buyer=GUJ→CGST+SGST; seller=MH+buyer=GUJ→IGST).
+
+### Verified
+- iter_20: 6/6 backend + full frontend UI (100%). PDF pdfplumber-asserted for new company name, bank, T&C fallback.
+- Post-iter_20 investigation: convert-to-order guard is NOT regressed (live HTTP 409 with `{message, order_id, order_number}` confirmed on quote linked to order 0008). Iter_20 report's "regression" claim was test pollution.
+- Orphan order backfill: HRE/ORD/2026-27/0005 → its source quote now has `order_id` link. All 8 orders linked cleanly.

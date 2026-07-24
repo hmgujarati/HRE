@@ -48,7 +48,7 @@ export default function QuotationBuilder() {
           try {
             const c = await api.get(`/contacts/${cid}`);
             setContact(c.data);
-          } catch {}
+          } catch { /* ignore — contact prefill is best-effort */ }
         }
         const p = await api.get("/quotations/next-number");
         setPreview(p.data.preview);
@@ -57,7 +57,7 @@ export default function QuotationBuilder() {
         try {
           const { data: s } = await api.get("/settings/integrations");
           setTerms((s.terms?.default_terms) || "");
-        } catch {}
+        } catch { /* ignore — settings prefill is best-effort */ }
       }
       setLoaded(true);
     })();
