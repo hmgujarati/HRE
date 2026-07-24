@@ -1,26 +1,41 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   ChartBar, Tag, Stack, Wrench, Folders, Package, ClockCounterClockwise,
-  Storefront, GearSix, SignOut, FileText, AddressBook
+  Storefront, GearSix, SignOut, FileText, AddressBook, UsersThree, ClipboardText
 } from "@phosphor-icons/react";
 import { useAuth } from "@/contexts/AuthContext";
 
 const items = [
-  { to: "/dashboard", label: "Dashboard", icon: ChartBar },
-  { to: "/quotations", label: "Quotations", icon: FileText },
-  { to: "/orders", label: "Orders", icon: Storefront },
-  { to: "/contacts", label: "Contacts", icon: AddressBook },
-  { to: "/pricing-chart", label: "Pricing Chart", icon: Tag },
-  { to: "/product-families", label: "Product Families", icon: Stack },
-  { to: "/materials", label: "Materials", icon: Wrench },
-  { to: "/categories", label: "Categories", icon: Folders },
-  { to: "/products", label: "Products / Variants", icon: Package },
-  { to: "/price-history", label: "Price History", icon: ClockCounterClockwise },
+  { to: "/dashboard", label: "Dashboard", icon: ChartBar, key: "dashboard" },
+  { to: "/quotations", label: "Quotations", icon: FileText, key: "quotations" },
+  { to: "/orders", label: "Orders", icon: Storefront, key: "orders" },
+  { to: "/contacts", label: "Contacts", icon: AddressBook, key: "contacts" },
+  { to: "/pricing-chart", label: "Pricing Chart", icon: Tag, key: "pricing-chart" },
+  { to: "/product-families", label: "Product Families", icon: Stack, key: "product-families" },
+  { to: "/materials", label: "Materials", icon: Wrench, key: "materials" },
+  { to: "/categories", label: "Categories", icon: Folders, key: "categories" },
+  { to: "/products", label: "Products / Variants", icon: Package, key: "products" },
+  { to: "/price-history", label: "Price History", icon: ClockCounterClockwise, key: "price-history" },
+];
+
+// Admin-only shortcuts — hidden from managers/employees by default and gated
+// by role + allowed_tabs on the server for every write endpoint.
+const adminItems = [
+  { to: "/team", label: "Team", icon: UsersThree, key: "team" },
+  { to: "/activity", label: "Activity", icon: ClipboardText, key: "activity" },
 ];
 
 export default function Sidebar() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  // Admin sees everything. Other roles: if allowed_tabs is non-empty, restrict
+  // the visible items to exactly that whitelist. Empty allowed_tabs → all tabs.
+  const isAdmin = user?.role === "admin";
+  const allowed = user?.allowed_tabs || [];
+  const filterFn = (it) => isAdmin || allowed.length === 0 || allowed.includes(it.key);
+  const visibleItems = items.filter(filterFn);
+  const visibleAdminItems = adminItems.filter(() => isAdmin);
+  const settingsAllowed = isAdmin || allowed.length === 0 || allowed.includes("settings");
 
   return (
     <aside className="sidebar-dark fixed left-0 top-0 h-screen w-64 bg-[#1A1A1A] text-white flex flex-col border-r border-zinc-900 z-40" data-testid="sidebar">
@@ -32,7 +47,7 @@ export default function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-4">
         <div className="px-6 mb-3 text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold">CRM</div>
-        {items.map(({ to, label, icon: Icon }) => (
+        {visibleItems.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}
@@ -50,21 +65,48 @@ export default function Sidebar() {
           </NavLink>
         ))}
 
-        <div className="px-6 mt-6 mb-3 text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold">System</div>
-        <NavLink
-          to="/settings"
-          data-testid="nav-settings"
-          className={({ isActive }) =>
-            `flex items-center gap-3 px-6 py-3 text-sm font-medium transition-colors border-r-4 ${
-              isActive
-                ? 'bg-zinc-900/60 text-[#FBAE17] border-[#FBAE17]'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40 border-transparent'
-            }`
-          }
-        >
-          <GearSix size={18} />
-          <span>Settings</span>
-        </NavLink>
+        {visibleAdminItems.length > 0 && (
+          <>
+            <div className="px-6 mt-6 mb-3 text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold">Admin</div>
+            {visibleAdminItems.map(({ to, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                data-testid={`nav-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-6 py-3 text-sm font-medium transition-colors border-r-4 ${
+                    isActive
+                      ? 'bg-zinc-900/60 text-[#FBAE17] border-[#FBAE17]'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40 border-transparent'
+                  }`
+                }
+              >
+                <Icon size={18} weight="regular" />
+                <span>{label}</span>
+              </NavLink>
+            ))}
+          </>
+        )}
+
+        {settingsAllowed && (
+          <>
+            <div className="px-6 mt-6 mb-3 text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold">System</div>
+            <NavLink
+              to="/settings"
+              data-testid="nav-settings"
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-6 py-3 text-sm font-medium transition-colors border-r-4 ${
+                  isActive
+                    ? 'bg-zinc-900/60 text-[#FBAE17] border-[#FBAE17]'
+                    : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40 border-transparent'
+                }`
+              }
+            >
+              <GearSix size={18} />
+              <span>Settings</span>
+            </NavLink>
+          </>
+        )}
       </nav>
 
       {/* User */}

@@ -1,0 +1,26 @@
+{
+  "summary": "Iter21 — Team/Users CRUD + AuditMiddleware + Activity page. Backend: 21/21 pytest cases pass (Team CRUD incl. dup/role/tab-key validation, PATCH, reset-password, deactivate/activate, self-deactivate + last-admin-demote guards, non-admin 403s on /users + /audit-logs, audit capture writes-only, /auth/* skipped, filters, summary, latency). Frontend: /team + /activity render with all documented data-testids; create modal + edit modal (prefill, email disabled) work; Activity 4 stat cards + filter search returns POST rows; employee login shows sidebar restricted to Dashboard + Quotations only (Team/Activity/Settings/Materials all hidden). Login response + /auth/me correctly surface can_delete/can_edit/allowed_tabs (admin=true/true/[]). All test data cleaned up (employee + temp admin deactivated).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration21_team_audit.py",
+    "/app/test_reports/pytest/iter21.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "services/audit.py: user identity comes only from the JWT payload (best-effort, no DB lookup). If a token has been revoked but not expired, the audit row still attributes the action to that user — acceptable trade-off given the middleware runs on every request.",
+    "audit.py _parse_entity_id: regex `[0-9a-fA-F-]{8,}` matches almost any hex-ish trailing segment (including short slugs like 'activate'/'deactivate'). Observed entity_id captured as '...9f9e/deactivate' path but entity_id extraction correctly picks the UUID-ish segment. Consider tightening to a UUID regex.",
+    "routers/users.py test_last_admin_demote guard: works when demoting via PATCH (role→employee). BUT there is NO deactivate guard for the LAST admin unless it's self-deactivation — from a *second* admin account, one COULD deactivate the only-other-admin then deactivate self via a different path only if they used PATCH… wait, actually deactivate_user does check `other_admins == 0` when target.role=='admin', so that path is covered. Verified in test.",
+    "routers/users.py PATCH allows changing role WITHOUT enforcing that permission fields make sense (e.g., you can set role='admin' AND can_delete=False, which will still yield admin because auth.py hard-codes admin→can_delete=True). Not a bug, but confusing for admins reading the UI. Minor.",
+    "Frontend Team.jsx UserFormModal: role='admin' hides the fine-grained permissions panel and the allowed_tabs grid — good UX, but pre-existing selections persist in state and get sent on submit. Backend accepts them; effective perms are still forced to admin. Cosmetic only.",
+    "Activity.jsx summary panel gated by `{summary && ...}`. On first render summary is null; stat cards only mount after both requests resolve. Tests must wait_for_selector on activity-stat-total (added in this run).",
+    "AuditMiddleware installed AFTER app.include_router — fine in Starlette (middleware wraps the whole app), but reads a little unusual; consider moving `app.add_middleware(AuditMiddleware)` above router mounts for clarity."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration21_team_audit.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@hrexporter.com / Admin@123. Temp employees created + deactivated during the run (audittest+<hex>@hrexporter.com / NewAudit@5678, uitest+<ts>@hrexporter.com / UiTest@12345, tempadmin+<hex>@hrexporter.com / TempAdmin@1234).",
+  "seed_data_creation": "None persisted — all test users deactivated at teardown (both backend pytest fixture and frontend script explicitly click the toggle-active button on the row).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The audit_logs collection now has ~30+ rows from this run — legitimate. Filter by path_contains=/users or by user_email to narrow. The test file test_iteration21_team_audit.py can be re-run standalone; it is idempotent (unique run-hash suffix on all test emails)."
+}

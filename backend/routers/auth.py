@@ -87,18 +87,31 @@ async def login(payload: LoginIn):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     _record_success(payload.email)
     token = create_token(user["id"], user["email"], user["role"])
+    # Compute effective per-user permissions: admins are always fully privileged;
+    # other roles fall back to any explicit `can_*` / `allowed_tabs` overrides
+    # set from the Team management screen.
+    is_admin = user["role"] == "admin"
     return {
         "token": token,
         "user": {
             "id": user["id"], "name": user["name"], "email": user["email"],
             "mobile": user.get("mobile"), "role": user["role"], "active": user.get("active", True),
+            "can_delete": True if is_admin else bool(user.get("can_delete", False)),
+            "can_edit": True if is_admin else bool(user.get("can_edit", user["role"] == "manager")),
+            "allowed_tabs": [] if is_admin else list(user.get("allowed_tabs") or []),
         },
     }
 
 
 @router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
-    return user
+    is_admin = user.get("role") == "admin"
+    return {
+        **user,
+        "can_delete": True if is_admin else bool(user.get("can_delete", False)),
+        "can_edit": True if is_admin else bool(user.get("can_edit", user.get("role") == "manager")),
+        "allowed_tabs": [] if is_admin else list(user.get("allowed_tabs") or []),
+    }
 
 
 @router.post("/auth/logout")

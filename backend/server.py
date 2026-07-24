@@ -1483,6 +1483,11 @@ from routers import orders as _orders_router  # noqa: E402
 # Phase 3 — shipments
 from routers import shipments as _shipments_router  # noqa: E402
 from routers import health as _health_router  # noqa: E402
+from routers import users as _users_router  # noqa: E402
+from routers import audit as _audit_router  # noqa: E402
+from services.audit import AuditMiddleware  # noqa: E402
+
+app.add_middleware(AuditMiddleware)
 
 api.include_router(_auth_router.router)
 api.include_router(_materials_router.router)
@@ -1498,6 +1503,8 @@ api.include_router(_quotations_router.router)
 api.include_router(_orders_router.router)
 api.include_router(_shipments_router.router)
 api.include_router(_health_router.router)
+api.include_router(_users_router.router)
+api.include_router(_audit_router.router)
 
 
 # Mount the API router AFTER all routes are registered

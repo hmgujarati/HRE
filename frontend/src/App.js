@@ -22,6 +22,8 @@ import QuotationBuilder from "@/pages/QuotationBuilder";
 import QuotationView from "@/pages/QuotationView";
 import Orders from "@/pages/Orders";
 import OrderView from "@/pages/OrderView";
+import Team from "@/pages/Team";
+import Activity from "@/pages/Activity";
 import PublicCatalogue from "@/pages/public/PublicCatalogue";
 import PublicFamilyDetail from "@/pages/public/PublicFamilyDetail";
 import RequestQuote from "@/pages/public/RequestQuote";
@@ -63,6 +65,8 @@ function App() {
             <Route path="/materials" element={<Materials />} />
             <Route path="/categories" element={<Categories />} />
             <Route path="/price-history" element={<PriceHistory />} />
+            <Route path="/team" element={<Team />} />
+            <Route path="/activity" element={<Activity />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<ComingSoon title="Not found" />} />
           </Route>

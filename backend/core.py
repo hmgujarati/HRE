@@ -130,6 +130,9 @@ class UserOut(BaseModel):
     mobile: Optional[str] = None
     role: str
     active: bool = True
+    can_delete: bool = False
+    can_edit: bool = True
+    allowed_tabs: List[str] = Field(default_factory=list)
 
 
 class MaterialIn(BaseModel):
